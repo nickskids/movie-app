@@ -4,7 +4,7 @@ import re
 from serpapi import GoogleSearch
 
 # --- CONFIGURATION ---
-st.set_page_config(page_title="Theater Critic Check", page_icon="🍿")
+st.set_page_config(page_title="Theater Critic Check", page_icon="🍿", layout="wide")
 
 try:
     SERPAPI_KEY = st.secrets["SERPAPI_KEY"]
@@ -13,7 +13,6 @@ except:
     st.stop()
 
 # --- HELPER: HEADER FOR FAKING A BROWSER ---
-# We use this for both guessing and scraping to avoid being blocked
 HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
 }
@@ -53,24 +52,21 @@ def get_rt_url_smart(title):
     1. Tries to GUESS the URL (Free).
     2. If guess fails, USES SEARCH (1 Credit).
     """
-    # --- STEP 1: FREE GUESS ---
-    # Convert "Marty Supreme" -> "marty_supreme"
-    # Remove special chars (like :) and replace spaces with underscores
+    # Clean title for URL guessing
     clean_title = re.sub(r'[^\w\s]', '', title).lower()
     slug = re.sub(r'\s+', '_', clean_title)
     
     guessed_url = f"https://www.rottentomatoes.com/m/{slug}"
     
+    # Try the free guess
     try:
-        # We just ping the header to see if the page exists (faster)
-        response = requests.get(guessed_url, headers=HEADERS, timeout=3)
+        response = requests.get(guessed_url, headers=HEADERS, timeout=2)
         if response.status_code == 200:
             return guessed_url, "Free Guess"
     except:
         pass
 
-    # --- STEP 2: PAID SEARCH (Fallback) ---
-    # Only runs if the guess above failed (404)
+    # Fallback to Paid Search
     params = {
         "engine": "google",
         "q": f"{title} rotten tomatoes movie",
@@ -90,15 +86,13 @@ def get_rt_url_smart(title):
     return None, "Failed"
 
 def scrape_rt_source(url):
-    """
-    Downloads source and finds 'criticsAll':{'averageRating':'8.8'}
-    """
+    """Downloads source and finds 'criticsAll':{'averageRating':'8.8'}"""
     try:
         response = requests.get(url, headers=HEADERS, timeout=5)
         if response.status_code == 200:
             html = response.text
             
-            # The specific JSON pattern you found
+            # The specific JSON pattern
             pattern = r'"criticsAll"\s*:\s*\{[^}]*"averageRating"\s*:\s*"(\d+\.?\d*)"'
             match = re.search(pattern, html)
             if match:
@@ -136,13 +130,16 @@ if st.button("Get True Ratings", type="primary"):
             
             data = []
             progress = st.progress(0)
+            status_text = st.empty()
             
             for i, movie in enumerate(movies):
-                # 2. Smart Find URL (Mostly Free)
+                status_text.text(f"Checking: {movie}")
+                
+                # 2. Smart Find URL
                 rt_url, method = get_rt_url_smart(movie)
                 rating = "N/A"
                 
-                # 3. Scrape Source (Free)
+                # 3. Scrape Source
                 if rt_url:
                     rating = scrape_rt_source(rt_url)
                 
@@ -156,21 +153,26 @@ if st.button("Get True Ratings", type="primary"):
                 data.append({
                     "Movie": movie,
                     "True Rating": rating,
-                    "Source": method, # Shows you if it was Free or Paid
+                    "Source": method,
                     "_sort": sort_val,
                     "Link": rt_url
                 })
                 progress.progress((i + 1) / len(movies))
             
             progress.empty()
+            status_text.empty()
+            
+            # Sort highest rating first
             data.sort(key=lambda x: x["_sort"], reverse=True)
             
+            # FORCE COLUMNS TO APPEAR
             st.dataframe(
                 data,
+                column_order=["Movie", "True Rating", "Source", "Link"], 
                 column_config={
-                    "Movie": st.column_config.TextColumn("Movie"),
-                    "True Rating": st.column_config.TextColumn("Avg Score (x/10)"),
-                    "Source": st.column_config.TextColumn("Cost Method", help="Free Guess = $0. Paid Search = 1 Credit."),
+                    "Movie": st.column_config.TextColumn("Movie", width="medium"),
+                    "True Rating": st.column_config.TextColumn("Score", width="small"),
+                    "Source": st.column_config.TextColumn("Method", width="small", help="Free Guess vs Paid Search"),
                     "Link": st.column_config.LinkColumn("Verify"),
                     "_sort": None
                 },
