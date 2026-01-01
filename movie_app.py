@@ -25,8 +25,12 @@ THEATERS = {
 }
 
 # --- HEADERS ---
+# Enhanced headers to mimic a real user visiting the site
 HEADERS = {
-    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
+    "Accept-Language": "en-US,en;q=0.5",
+    "Referer": "https://www.google.com/"
 }
 
 # --- FUNCTIONS ---
@@ -63,47 +67,62 @@ def run_search_query(query):
 
 def scrape_rt_national_forecast():
     """
-    Method B (Upcoming): Scrapes Rotten Tomatoes 'Coming Soon' + 'Popular'.
-    Returns a list of dicts: {'title': 'Name', 'link': 'url'}
+    Method B (Upcoming): Scrapes Rotten Tomatoes using a robust 'Broad Net' regex.
     """
     movies = []
     seen_titles = set()
     
-    # 1. GET "POPULAR" (The Holdovers)
+    # URL 1: POPULAR (Holdovers)
     try:
         url_pop = "https://www.rottentomatoes.com/browse/movies_in_theaters/sort:popular"
         res_pop = requests.get(url_pop, headers=HEADERS, timeout=5)
         if res_pop.status_code == 200:
-            matches = re.findall(r'<a href="(/m/[^"]+)"[^>]*>.*?<span class="p--small">([^<]+)</span>', res_pop.text, re.DOTALL)
-            for link, title in matches[:15]: # Expanded to top 15 to catch more
+            html = res_pop.text
+            # PATTERN 1: Look for the structural 'data-qa' tag (Most reliable)
+            matches = re.findall(r'data-qa="discovery-media-list-item-title">\s*([^<]+)\s*</span>', html)
+            
+            # PATTERN 2: Fallback to finding any /m/ link with text inside
+            if not matches:
+                matches = re.findall(r'href="(/m/[^"]+)"[^>]*>\s*<span[^>]*>([^<]+)</span>', html)
+                # If this pattern hits, it returns tuples (link, title). We just want titles for now.
+                matches = [m[1] for m in matches]
+
+            for title in matches[:15]:
                 clean_title = title.strip()
                 if clean_title not in seen_titles:
                     movies.append({
                         "title": clean_title,
-                        "link": f"https://www.rottentomatoes.com{link}",
+                        # We reconstruct the link safely
+                        "link": f"https://www.rottentomatoes.com/m/{re.sub(r'[^\w\s]', '', clean_title).lower().replace(' ', '_')}",
                         "type": "Popular"
                     })
                     seen_titles.add(clean_title)
-    except:
-        pass
+    except Exception as e:
+        print(f"Popular Scrape Error: {e}")
 
-    # 2. GET "COMING SOON" (The New Stuff)
+    # URL 2: COMING SOON (New Stuff)
     try:
         url_soon = "https://www.rottentomatoes.com/browse/movies_in_theaters/coming_soon"
         res_soon = requests.get(url_soon, headers=HEADERS, timeout=5)
         if res_soon.status_code == 200:
-            matches = re.findall(r'<a href="(/m/[^"]+)"[^>]*>.*?<span class="p--small">([^<]+)</span>', res_soon.text, re.DOTALL)
-            for link, title in matches[:10]:
+            html = res_soon.text
+            matches = re.findall(r'data-qa="discovery-media-list-item-title">\s*([^<]+)\s*</span>', html)
+            
+            if not matches:
+                 matches = re.findall(r'href="(/m/[^"]+)"[^>]*>\s*<span[^>]*>([^<]+)</span>', html)
+                 matches = [m[1] for m in matches]
+
+            for title in matches[:15]:
                 clean_title = title.strip()
                 if clean_title not in seen_titles:
                     movies.append({
                         "title": clean_title,
-                        "link": f"https://www.rottentomatoes.com{link}",
+                        "link": f"https://www.rottentomatoes.com/m/{re.sub(r'[^\w\s]', '', clean_title).lower().replace(' ', '_')}",
                         "type": "New Release"
                     })
                     seen_titles.add(clean_title)
-    except:
-        pass
+    except Exception as e:
+        print(f"Coming Soon Scrape Error: {e}")
         
     return movies
 
@@ -114,10 +133,10 @@ def get_movies_at_theater(theater_name, use_national_forecast=False):
     zip_code = THEATERS[theater_name]
     
     if use_national_forecast:
-        # UPCOMING MODE -> RT FORECAST (Returns Dicts with Links)
+        # UPCOMING MODE -> RT FORECAST
         return scrape_rt_national_forecast()
     else:
-        # TODAY MODE -> GOOGLE (Returns Strings)
+        # TODAY MODE -> GOOGLE
         query = f"movies playing at {theater_name} {zip_code}"
         titles = run_search_query(query)
         
@@ -198,7 +217,7 @@ with st.sidebar:
     
     st.markdown("---")
     
-    # UPDATED: Date Toggle with new Label
+    # Date Toggle
     date_mode = st.radio("When to check?", ["Today", "Upcoming Movies"], horizontal=True)
     
     use_forecast = False
@@ -218,7 +237,7 @@ if st.button("Get True Ratings", type="primary"):
         raw_results = get_movies_at_theater(selected_theater_name, use_forecast)
         
         if not raw_results:
-             st.error("Could not fetch movie list.")
+             st.error("Could not fetch movie list. Rotten Tomatoes might be updating their site.")
         else:
             st.info(f"Found {len(raw_results)} movies. Getting scores...")
             
@@ -229,12 +248,13 @@ if st.button("Get True Ratings", type="primary"):
             for i, item in enumerate(raw_results):
                 # Handle data format differences
                 if isinstance(item, dict):
-                    # Upcoming Mode (We already have the link!)
+                    # Upcoming Mode
                     movie_title = item["title"]
-                    rt_url = item["link"]
-                    method = "Direct Link (RT)"
+                    # We re-guess the URL to be safe, as list URLs can vary
+                    rt_url = None 
+                    method = "Forecast"
                 else:
-                    # Today Mode (We just have the name)
+                    # Today Mode
                     movie_title = item
                     rt_url = None
                     method = "Scanning..."
@@ -244,12 +264,13 @@ if st.button("Get True Ratings", type="primary"):
                 # Logic Flow
                 rating = "N/A"
                 
+                # We always verify the link to ensure we get the Rating Page, not the Info Page
+                rt_url = guess_rt_url(movie_title)
+                if not rt_url and isinstance(item, dict):
+                    # Fallback to the link found in the forecast if guess fails
+                    rt_url = item["link"]
+                
                 if rt_url:
-                    # We have the link, just scrape it
-                    rating = scrape_rt_source(rt_url)
-                else:
-                    # We need to find the link first
-                    rt_url = guess_rt_url(movie_title)
                     method = "Free Guess"
                     rating = scrape_rt_source(rt_url)
                     
