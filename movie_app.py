@@ -30,9 +30,12 @@ HEADERS = {
 
 # --- FUNCTIONS ---
 
-def run_search_query(query, match_date_string=None):
+def run_search_query(query, target_date_str=None):
     """
-    Runs search. Returns a Tuple: (List of Movies, Boolean is_fallback)
+    Smart Search:
+    1. Tries to find 'target_date_str' (e.g. "Jan 8").
+    2. If missing, grabs the FIRST available day from the same result.
+    3. Returns: (movies, found_date_name)
     """
     params = {
         "engine": "google",
@@ -44,53 +47,70 @@ def run_search_query(query, match_date_string=None):
     try:
         search = GoogleSearch(params)
         results = search.get_dict()
-        specific_movies = []
-        fallback_movies = []
+        movies = []
+        found_date = "Unknown Date"
         
-        # 1. SCAN FOR SPECIFIC DATE
-        if match_date_string and "showtimes" in results:
+        # 1. Look for specific date match
+        date_match_found = False
+        if target_date_str and "showtimes" in results:
             for day_block in results["showtimes"]:
                 day_header = day_block.get("day", "").lower()
-                if match_date_string.lower() in day_header:
+                if target_date_str.lower() in day_header:
+                    found_date = day_block.get("day", "Target Date")
                     if "movies" in day_block:
                         for m in day_block["movies"]:
-                            specific_movies.append(m["name"])
+                            movies.append(m["name"])
+                    date_match_found = True
+                    break
         
-        # 2. IF FOUND, RETURN IMMEDIATELY
-        if specific_movies:
-            return specific_movies, False
+        # 2. If Specific Date NOT found, grab the First Available Day
+        if not date_match_found:
+            # Check Showtimes first
+            if "showtimes" in results and len(results["showtimes"]) > 0:
+                first_day = results["showtimes"][0]
+                found_date = first_day.get("day", "Today")
+                if "movies" in first_day:
+                    for m in first_day["movies"]:
+                        movies.append(m["name"])
             
-        # 3. IF NOT FOUND, GRAB FALLBACK
-        if "knowledge_graph" in results and "movies_playing" in results["knowledge_graph"]:
-            for m in results["knowledge_graph"]["movies_playing"]:
-                fallback_movies.append(m["name"])
-                
-        if not fallback_movies and "showtimes" in results:
-             for day_block in results["showtimes"]:
-                 if "movies" in day_block:
-                     for m in day_block["movies"]:
-                         fallback_movies.append(m["name"])
-                     break 
-        
-        return list(set(fallback_movies)), True
+            # Check Knowledge Graph (Carousel) as last resort
+            elif "knowledge_graph" in results and "movies_playing" in results["knowledge_graph"]:
+                found_date = "Today (Carousel)"
+                for m in results["knowledge_graph"]["movies_playing"]:
+                    movies.append(m["name"])
+
+        return list(set(movies)), found_date
 
     except:
-        return [], False
+        return [], "Error"
 
 def get_movies_at_theater(theater_name, location, target_date_short=None, target_date_long=None):
+    """
+    Orchestrates the search. 
+    Returns: (movies, actual_date_found, is_fallback_mode)
+    """
     if target_date_long:
+        # SEARCH FUTURE (e.g. "Showtimes Jan 8")
         query = f"showtimes for {theater_name} {location} on {target_date_long}"
-        movies, is_fallback = run_search_query(query, match_date_string=target_date_short)
-        return movies, is_fallback
-    else:
-        query = f"movies playing at {theater_name} {location}"
-        movies, _ = run_search_query(query)
+        movies, found_date = run_search_query(query, target_date_str=target_date_short)
         
+        # Did we find the date we asked for?
+        is_fallback = False
+        if target_date_short and target_date_short.lower() not in found_date.lower():
+            is_fallback = True
+            
+        return movies, found_date, is_fallback
+    else:
+        # SEARCH TODAY
+        query = f"movies playing at {theater_name} {location}"
+        movies, found_date = run_search_query(query)
+        
+        # Safety net for late night empty results
         if len(set(movies)) < 4:
             movies_tomorrow, _ = run_search_query(f"movies playing at {theater_name} {location} tomorrow")
             movies.extend(movies_tomorrow)
             
-        return list(set(movies)), False
+        return list(set(movies)), "Today", False
 
 def guess_rt_url(title):
     clean_title = re.sub(r'[^\w\s]', '', title).lower()
@@ -132,43 +152,31 @@ def find_rt_url_paid(title):
     return None
 
 def scrape_rt_source(url):
-    """
-    Extracts TWO values:
-    1. Average Rating (e.g. "8.8/10")
-    2. Review Count (e.g. "245")
-    """
     if not url: return "N/A", "N/A"
     
     try:
         response = requests.get(url, headers=HEADERS, timeout=5)
         if response.status_code == 200:
             html = response.text
-            
             rating = "N/A"
             count = "N/A"
             
-            # Regex for RATING
-            # Looks for "averageRating":"8.8" inside criticsAll block
+            # Rating
             match_rating = re.search(r'"criticsAll"\s*:\s*\{[^}]*?"averageRating"\s*:\s*"(\d+\.?\d*)"', html)
-            if match_rating:
-                rating = f"{match_rating.group(1)}/10"
+            if match_rating: rating = f"{match_rating.group(1)}/10"
                 
-            # Regex for REVIEW COUNT
-            # Looks for "reviewCount":123 inside criticsAll block
+            # Count
             match_count = re.search(r'"criticsAll"\s*:\s*\{[^}]*?"reviewCount"\s*:\s*(\d+)', html)
-            if match_count:
-                count = match_count.group(1)
+            if match_count: count = match_count.group(1)
             
-            # Backup: Check "criticsScore" block if criticsAll fails
+            # Backup
             if rating == "N/A":
                  match_rating_back = re.search(r'"criticsScore"\s*:\s*\{[^}]*?"averageRating"\s*:\s*"(\d+\.?\d*)"', html)
                  if match_rating_back: rating = f"{match_rating_back.group(1)}/10"
 
             return rating, count
-            
     except:
         pass
-        
     return "N/A", "N/A"
 
 def get_next_thursday_data():
@@ -210,13 +218,16 @@ with st.sidebar:
 if st.button("Get True Ratings", type="primary"):
     with st.spinner(f"Checking schedule..."):
         
-        movies, is_fallback = get_movies_at_theater(selected_theater_name, selected_zip, target_short, target_long)
+        # 1. GET MOVIES (1 Credit Only)
+        movies, found_date, is_fallback = get_movies_at_theater(selected_theater_name, selected_zip, target_short, target_long)
         
         if not movies:
             st.error("No movies found at all.")
         else:
+            # 2. INTELLIGENT WARNING
             if is_fallback:
-                st.warning(f"⚠️ Schedule for **{target_long}** is not posted yet. Showing **Today's** movies so your credit isn't wasted.")
+                st.warning(f"⚠️ Schedule for **{target_long}** is not posted yet.")
+                st.info(f"Showing results for **{found_date}** instead (so your credit isn't wasted).")
             else:
                 if date_mode == "Next Thursday":
                     st.success(f"✅ Found specific schedule for **{target_long}**!")
@@ -233,7 +244,6 @@ if st.button("Get True Ratings", type="primary"):
                 # Phase 1: Free Guess
                 url = guess_rt_url(movie)
                 method = "Free Guess"
-                # Scrape both rating and count
                 rating, count = scrape_rt_source(url)
                 
                 # Phase 2: Paid Fallback
@@ -251,7 +261,7 @@ if st.button("Get True Ratings", type="primary"):
                 data.append({
                     "Movie": movie,
                     "True Rating": rating,
-                    "Reviews": count,  # New Field
+                    "Reviews": count,
                     "Source": method,
                     "_sort": sort_val,
                     "Link": url
@@ -262,14 +272,13 @@ if st.button("Get True Ratings", type="primary"):
             status_text.empty()
             data.sort(key=lambda x: x["_sort"], reverse=True)
             
-            # Display with new column
             st.dataframe(
                 data,
                 column_order=["Movie", "True Rating", "Reviews", "Source", "Link"], 
                 column_config={
                     "Movie": st.column_config.TextColumn("Movie", width="medium"),
                     "True Rating": st.column_config.TextColumn("Score", width="small"),
-                    "Reviews": st.column_config.TextColumn("Count", width="small"), # New Column Config
+                    "Reviews": st.column_config.TextColumn("Count", width="small"),
                     "Source": st.column_config.TextColumn("Method", width="small"),
                     "Link": st.column_config.LinkColumn("Verify"),
                     "_sort": None
