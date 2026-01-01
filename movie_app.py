@@ -29,8 +29,12 @@ HEADERS = {
 }
 
 # --- FUNCTIONS ---
-def run_search_query(query):
-    """Helper: Runs a single Google Search and returns movie titles."""
+def run_search_query(query, strict_date_search=False):
+    """
+    Helper: Runs a single Google Search and returns movie titles.
+    strict_date_search: If True, IGNORES the Knowledge Graph carousel (which shows today's movies)
+                        and only looks at specific showtime lists.
+    """
     params = {
         "engine": "google",
         "q": query,
@@ -43,14 +47,17 @@ def run_search_query(query):
         results = search.get_dict()
         titles = []
         
-        # Method A: Knowledge Graph
-        if "knowledge_graph" in results and "movies_playing" in results["knowledge_graph"]:
-            for m in results["knowledge_graph"]["movies_playing"]:
-                titles.append(m["name"])
+        # Method A: Knowledge Graph (Carousel)
+        # We SKIP this if strict_date_search is True, because the carousel is usually stuck on "Today"
+        if not strict_date_search:
+            if "knowledge_graph" in results and "movies_playing" in results["knowledge_graph"]:
+                for m in results["knowledge_graph"]["movies_playing"]:
+                    titles.append(m["name"])
         
-        # Method B: Showtimes List
-        elif "showtimes" in results:
+        # Method B: Showtimes List (The accurate list for specific days)
+        if "showtimes" in results:
             for day in results["showtimes"]:
+                # If searching for a specific date, Google usually only returns that one day block.
                 if "movies" in day:
                     for m in day["movies"]:
                         titles.append(m["name"])
@@ -62,20 +69,21 @@ def run_search_query(query):
 def get_movies_at_theater(theater_name, location, target_date_str=None):
     """
     Finds movies. 
-    target_date_str: If None, checks "Today". If set, checks specific date.
+    target_date_str: If set, we use STRICT MODE to avoid grabbing today's movies by accident.
     """
     if target_date_str:
-        # Search for specific future date
-        query = f"movies playing at {theater_name} {location} on {target_date_str}"
-        movies = run_search_query(query)
+        # Search for specific future date with STRICT MODE enabled
+        # We change query to "showtimes for..." which triggers the list view better
+        query = f"showtimes for {theater_name} {location} on {target_date_str}"
+        movies = run_search_query(query, strict_date_search=True)
     else:
-        # Search Today
+        # Search Today (Standard Mode)
         query = f"movies playing at {theater_name} {location}"
-        movies = run_search_query(query)
+        movies = run_search_query(query, strict_date_search=False)
 
         # LATE NIGHT SAFETY NET (Only for Today)
         if len(set(movies)) < 4:
-            movies_tomorrow = run_search_query(f"movies playing at {theater_name} {location} tomorrow")
+            movies_tomorrow = run_search_query(f"movies playing at {theater_name} {location} tomorrow", strict_date_search=False)
             movies.extend(movies_tomorrow)
     
     return list(set(movies))
@@ -195,8 +203,6 @@ if st.button("Get True Ratings", type="primary"):
                 rating = scrape_rt_source(url)
                 
                 # Phase 2: Paid Fallback (CONDITIONAL)
-                # If checking Today: We pay to find the rating.
-                # If checking Next Thursday: We accept "N/A" to save money.
                 if rating == "N/A" and date_mode == "Today":
                     url = find_rt_url_paid(movie)
                     method = "Paid Search"
