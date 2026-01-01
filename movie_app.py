@@ -1,6 +1,7 @@
 import streamlit as st
 import requests
 import re
+import datetime
 from serpapi import GoogleSearch
 
 # --- CONFIGURATION ---
@@ -42,45 +43,45 @@ def run_search_query(query):
         results = search.get_dict()
         titles = []
         
-        # Method A: Knowledge Graph (The Carousel - Best source)
+        # Method A: Knowledge Graph
         if "knowledge_graph" in results and "movies_playing" in results["knowledge_graph"]:
             for m in results["knowledge_graph"]["movies_playing"]:
                 titles.append(m["name"])
         
-        # Method B: Showtimes List (Fallback)
+        # Method B: Showtimes List
         elif "showtimes" in results:
             for day in results["showtimes"]:
                 if "movies" in day:
                     for m in day["movies"]:
                         titles.append(m["name"])
-                # We remove the 'break' here to grab all days available in the JSON
     
         return titles
     except:
         return []
 
-def get_movies_at_theater(theater_name, location):
+def get_movies_at_theater(theater_name, location, target_date_str=None):
     """
     Finds movies. 
-    LATE NIGHT FIX: If 'Today' has < 4 movies, we verify with 'Tomorrow' to ensure full list.
+    target_date_str: If None, checks "Today". If set, checks specific date.
     """
-    # 1. Search Today
-    movies = run_search_query(f"movies playing at {theater_name} {location}")
-    
-    # 2. Safety Net: If list is suspicious (too short), check Tomorrow
-    # This fixes the "11 PM Bug" where finished movies disappear.
-    if len(set(movies)) < 4:
-        st.toast(f"Late night check: Verifying schedule with tomorrow's listings...")
-        movies_tomorrow = run_search_query(f"movies playing at {theater_name} {location} tomorrow")
-        movies.extend(movies_tomorrow)
+    if target_date_str:
+        # Search for specific future date
+        query = f"movies playing at {theater_name} {location} on {target_date_str}"
+        movies = run_search_query(query)
+    else:
+        # Search Today
+        query = f"movies playing at {theater_name} {location}"
+        movies = run_search_query(query)
+
+        # LATE NIGHT SAFETY NET (Only for Today)
+        if len(set(movies)) < 4:
+            movies_tomorrow = run_search_query(f"movies playing at {theater_name} {location} tomorrow")
+            movies.extend(movies_tomorrow)
     
     return list(set(movies))
 
 def guess_rt_url(title):
-    """
-    FUTURE-PROOF LOGIC:
-    Checks years (2025-2028) first to handle Remakes/Reboots.
-    """
+    """Checks years (2025-2028) first to handle Remakes/Reboots."""
     clean_title = re.sub(r'[^\w\s]', '', title).lower()
     slug = re.sub(r'\s+', '_', clean_title)
     
@@ -94,7 +95,6 @@ def guess_rt_url(title):
     
     for url in potential_urls:
         try:
-            # Timeout 1.0s
             response = requests.get(url, headers=HEADERS, timeout=1.0)
             if response.status_code == 200:
                 return url
@@ -140,6 +140,15 @@ def scrape_rt_source(url):
         pass
     return "N/A"
 
+def get_next_thursday():
+    """Calculates the date string for the upcoming Thursday."""
+    today = datetime.date.today()
+    days_ahead = 3 - today.weekday()
+    if days_ahead <= 0: 
+        days_ahead += 7
+    next_thurs = today + datetime.timedelta(days=days_ahead)
+    return next_thurs.strftime("%B %d")
+
 # --- APP INTERFACE ---
 st.title("🍿 True Critic Ratings")
 st.caption("Select a theater below to see real critic scores.")
@@ -148,13 +157,25 @@ with st.sidebar:
     st.header("Settings")
     selected_theater_name = st.selectbox("Choose Theater", options=list(THEATERS.keys()))
     selected_zip = THEATERS[selected_theater_name]
-    st.info(f"Checking: **{selected_theater_name}**")
-    st.caption(f"(Zip: {selected_zip})")
+    
+    st.markdown("---")
+    
+    # Date Toggle
+    date_mode = st.radio("When to check?", ["Today", "Next Thursday"], horizontal=True)
+    
+    target_date = None
+    if date_mode == "Next Thursday":
+        target_date = get_next_thursday()
+        st.info(f"Checking for: **Thursday, {target_date}**")
+        st.warning("Future Check Mode: Will NOT spend credits hunting for missing ratings.")
+    else:
+        st.info(f"Checking: **{selected_theater_name}**")
+        st.caption(f"(Zip: {selected_zip})")
 
 if st.button("Get True Ratings", type="primary"):
-    with st.spinner(f"Checking showtimes for {selected_theater_name}..."):
-        # 1. Get Movies (With Late Night Fix)
-        movies = get_movies_at_theater(selected_theater_name, selected_zip)
+    with st.spinner(f"Checking schedule..."):
+        # 1. Get Movies
+        movies = get_movies_at_theater(selected_theater_name, selected_zip, target_date)
         
         if not movies:
             st.error("No movies found. Please try again later.")
@@ -173,8 +194,10 @@ if st.button("Get True Ratings", type="primary"):
                 method = "Free Guess"
                 rating = scrape_rt_source(url)
                 
-                # Phase 2: Paid Fallback
-                if rating == "N/A":
+                # Phase 2: Paid Fallback (CONDITIONAL)
+                # If checking Today: We pay to find the rating.
+                # If checking Next Thursday: We accept "N/A" to save money.
+                if rating == "N/A" and date_mode == "Today":
                     url = find_rt_url_paid(movie)
                     method = "Paid Search"
                     rating = scrape_rt_source(url)
