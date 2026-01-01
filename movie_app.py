@@ -33,9 +33,9 @@ HEADERS = {
 def run_search_query(query, target_date_str=None):
     """
     Smart Search:
-    1. Tries to find 'target_date_str' (e.g. "Jan 8").
-    2. If missing, grabs the FIRST available day from the same result.
-    3. Returns: (movies, found_date_name)
+    1. Runs a GENERIC search (guarantees results).
+    2. Scans for 'target_date_str'.
+    3. If missing, defaults to First Available Day.
     """
     params = {
         "engine": "google",
@@ -50,7 +50,7 @@ def run_search_query(query, target_date_str=None):
         movies = []
         found_date = "Unknown Date"
         
-        # 1. Look for specific date match
+        # 1. Look for specific date match in the list
         date_match_found = False
         if target_date_str and "showtimes" in results:
             for day_block in results["showtimes"]:
@@ -63,7 +63,7 @@ def run_search_query(query, target_date_str=None):
                     date_match_found = True
                     break
         
-        # 2. If Specific Date NOT found, grab the First Available Day
+        # 2. Fallback: Grab the First Available Day
         if not date_match_found:
             # Check Showtimes first
             if "showtimes" in results and len(results["showtimes"]) > 0:
@@ -86,12 +86,15 @@ def run_search_query(query, target_date_str=None):
 
 def get_movies_at_theater(theater_name, location, target_date_short=None, target_date_long=None):
     """
-    Orchestrates the search. 
-    Returns: (movies, actual_date_found, is_fallback_mode)
+    Orchestrates the search using BROAD QUERY logic.
     """
     if target_date_long:
-        # SEARCH FUTURE (e.g. "Showtimes Jan 8")
-        query = f"showtimes for {theater_name} {location} on {target_date_long}"
+        # STRATEGY CHANGE: Use a GENERIC query.
+        # Asking for "Showtimes Jan 8" can return a blank page if Google has no data.
+        # Asking for "Showtimes" ALWAYS returns the current schedule list.
+        # We then filter that list for Jan 8 ourselves.
+        query = f"showtimes for {theater_name} {location}"
+        
         movies, found_date = run_search_query(query, target_date_str=target_date_short)
         
         # Did we find the date we asked for?
@@ -105,7 +108,7 @@ def get_movies_at_theater(theater_name, location, target_date_short=None, target
         query = f"movies playing at {theater_name} {location}"
         movies, found_date = run_search_query(query)
         
-        # Safety net for late night empty results
+        # Safety net for late night
         if len(set(movies)) < 4:
             movies_tomorrow, _ = run_search_query(f"movies playing at {theater_name} {location} tomorrow")
             movies.extend(movies_tomorrow)
@@ -222,7 +225,7 @@ if st.button("Get True Ratings", type="primary"):
         movies, found_date, is_fallback = get_movies_at_theater(selected_theater_name, selected_zip, target_short, target_long)
         
         if not movies:
-            st.error("No movies found at all.")
+            st.error("No movies found at all. Google might be blocking requests temporarily.")
         else:
             # 2. INTELLIGENT WARNING
             if is_fallback:
