@@ -56,19 +56,19 @@ def guess_rt_url(title):
     slug = re.sub(r'\s+', '_', clean_title)
     
     # Updated List: 2025 -> 2028
-    # We check these FIRST so we don't accidentally grab an old 1990s movie.
     potential_urls = [
         f"https://www.rottentomatoes.com/m/{slug}_2025",
         f"https://www.rottentomatoes.com/m/{slug}_2026",
         f"https://www.rottentomatoes.com/m/{slug}_2027",
         f"https://www.rottentomatoes.com/m/{slug}_2028",
-        f"https://www.rottentomatoes.com/m/{slug}" # Standard (No conflict)
+        f"https://www.rottentomatoes.com/m/{slug}" # Standard
     ]
     
     for url in potential_urls:
         try:
-            # Timeout lowered to 0.5s to keep the app fast while checking many years
-            response = requests.get(url, headers=HEADERS, timeout=0.5)
+            # INCREASED TIMEOUT: 0.5 -> 1.0
+            # This prevents "Zootopia 2" from failing just because the wifi blinked.
+            response = requests.get(url, headers=HEADERS, timeout=1.0)
             if response.status_code == 200:
                 return url
         except:
@@ -123,7 +123,7 @@ def scrape_rt_source(url):
 
 # --- APP INTERFACE ---
 st.title("🍿 True Critic Ratings")
-st.caption("Updated: Checks 2025-2028 first to ensure future accuracy.")
+st.caption("Updated: Optimized connection timeout to save credits.")
 
 with st.sidebar:
     st.header("Settings")
