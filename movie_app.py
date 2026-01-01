@@ -1,20 +1,20 @@
 import streamlit as st
 import requests
+import re
 from serpapi import GoogleSearch
 
-# --- PAGE SETUP ---
+# --- CONFIGURATION ---
 st.set_page_config(page_title="Theater Critic Check", page_icon="🍿")
 
-# --- GET KEYS FROM SECURE CLOUD STORAGE ---
 try:
-    OMDB_API_KEY = st.secrets["OMDB_API_KEY"]
     SERPAPI_KEY = st.secrets["SERPAPI_KEY"]
 except:
-    st.error("API Keys not found! Please add them to Streamlit Secrets.")
+    st.error("SerpApi Key not found! Please add it to Streamlit Secrets.")
     st.stop()
 
 # --- FUNCTIONS ---
-def get_showtimes_google(theater_name, location):
+def get_movies_at_theater(theater_name, location):
+    """Finds what movies are playing using Google Search."""
     query = f"movies playing at {theater_name} {location}"
     params = {
         "engine": "google",
@@ -28,86 +28,130 @@ def get_showtimes_google(theater_name, location):
         results = search.get_dict()
         movie_titles = []
         
-        # Check standard showtimes list
-        if "showtimes" in results:
+        # Method A: Knowledge Graph (Cleanest)
+        if "knowledge_graph" in results and "movies_playing" in results["knowledge_graph"]:
+            for m in results["knowledge_graph"]["movies_playing"]:
+                movie_titles.append(m["name"])
+        
+        # Method B: Showtimes List
+        elif "showtimes" in results:
             for day in results["showtimes"]:
                 if "movies" in day:
-                    for movie in day["movies"]:
-                        if "name" in movie:
-                            movie_titles.append(movie["name"])
-                    break 
-        # Check knowledge graph fallback
-        elif "knowledge_graph" in results and "movies_playing" in results["knowledge_graph"]:
-             for movie in results["knowledge_graph"]["movies_playing"]:
-                 movie_titles.append(movie["name"])
-
+                    for m in day["movies"]:
+                        movie_titles.append(m["name"])
+                    break
+        
         return list(set(movie_titles))
     except Exception as e:
-        st.error(f"Error fetching showtimes: {e}")
         return []
 
-def get_movie_data(title):
-    url = f"http://www.omdbapi.com/?t={title}&apikey={OMDB_API_KEY}"
+def get_rt_url(movie_title):
+    """Finds the direct Rotten Tomatoes URL for a movie."""
+    params = {
+        "engine": "google",
+        "q": f"{movie_title} rotten tomatoes movie",
+        "api_key": SERPAPI_KEY,
+    }
     try:
-        data = requests.get(url).json()
-        if data.get("Response") == "True":
-            rt_score = "N/A"
-            for r in data.get("Ratings", []):
-                if r["Source"] == "Rotten Tomatoes":
-                    rt_score = r["Value"]
-            return {
-                "Title": data.get("Title"),
-                "RT %": rt_score,
-                "Metascore": data.get("Metascore", "N/A"),
-                "IMDb": data.get("imdbRating", "N/A")
-            }
+        search = GoogleSearch(params)
+        results = search.get_dict()
+        if "organic_results" in results:
+            for result in results["organic_results"]:
+                link = result.get("link", "")
+                if "rottentomatoes.com/m/" in link:
+                    return link
     except:
         pass
     return None
 
+def scrape_rt_source(url):
+    """
+    Downloads page source and regex-matches the specific JSON pattern:
+    "criticsAll":{"averageRating":"8.80"}
+    """
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+    }
+    
+    try:
+        response = requests.get(url, headers=headers, timeout=5)
+        if response.status_code == 200:
+            html = response.text
+            
+            # --- THE TARGETED REGEX ---
+            # We look for "criticsAll" followed eventually by "averageRating":"X.X"
+            # The pattern accounts for potential spaces or different quoting styles
+            pattern = r'"criticsAll"\s*:\s*\{[^}]*"averageRating"\s*:\s*"(\d+\.?\d*)"'
+            
+            match = re.search(pattern, html)
+            if match:
+                return f"{match.group(1)}/10"
+            
+            # Backup: Sometimes it is labeled 'criticsScore' instead of 'criticsAll'
+            # (Adding this just in case the key name varies by movie type)
+            backup_pattern = r'"criticsScore"\s*:\s*\{[^}]*"averageRating"\s*:\s*"(\d+\.?\d*)"'
+            match_backup = re.search(backup_pattern, html)
+            if match_backup:
+                return f"{match_backup.group(1)}/10"
+
+    except Exception as e:
+        print(f"Scrape Error: {e}")
+        
+    return "Not Found"
+
 # --- APP INTERFACE ---
-st.title("🍿 Theater Critic Check")
+st.title("🍿 True Critic Ratings")
+st.caption("Hunting for 'criticsAll' data in page source...")
 
 with st.sidebar:
     st.header("Settings")
-    theater_input = st.text_input("Theater Name", value="AMC DINE-IN Levittown 10")
-    location_input = st.text_input("Location", value="11756")
-    manual_mode = st.checkbox("Enter movies manually?")
-    if manual_mode:
-        manual_text = st.text_area("Paste Movie Names (one per line)", height=150)
+    theater = st.text_input("Theater", "AMC DINE-IN Levittown 10")
+    loc = st.text_input("Zip Code", "11756")
 
-if st.button("Get Ratings", type="primary"):
-    movies_to_check = []
-    
-    if manual_mode and manual_text:
-        movies_to_check = [line.strip() for line in manual_text.split('\n') if line.strip()]
-    else:
-        with st.spinner(f"Finding movies at {theater_input}..."):
-            movies_to_check = get_showtimes_google(theater_input, location_input)
-            if not movies_to_check:
-                st.error("No movies found automatically. Try Manual Mode.")
-
-    if movies_to_check:
-        results = []
-        progress_bar = st.progress(0)
-        status_text = st.empty()
+if st.button("Get True Ratings", type="primary"):
+    with st.spinner(f"Checking {theater}..."):
+        # 1. Find Movies
+        movies = get_movies_at_theater(theater, loc)
         
-        for idx, movie in enumerate(movies_to_check):
-            status_text.text(f"Checking: {movie}")
-            data = get_movie_data(movie)
-            if data:
-                results.append(data)
-            progress_bar.progress((idx + 1) / len(movies_to_check))
+        if not movies:
+            st.error("No movies found.")
+        else:
+            st.info(f"Found {len(movies)} movies. Scanning source code...")
             
-        progress_bar.empty()
-        status_text.empty()
-        
-        if results:
+            # 2. Scrape Each Movie
+            data = []
+            progress = st.progress(0)
+            
+            for i, movie in enumerate(movies):
+                rt_url = get_rt_url(movie)
+                rating = "N/A"
+                
+                if rt_url:
+                    rating = scrape_rt_source(rt_url)
+                
+                # Sort logic
+                sort_val = 0.0
+                try:
+                    sort_val = float(rating.split("/")[0])
+                except:
+                    pass
+                
+                data.append({
+                    "Movie": movie,
+                    "True Rating": rating,
+                    "_sort": sort_val
+                })
+                progress.progress((i + 1) / len(movies))
+            
+            progress.empty()
+            data.sort(key=lambda x: x["_sort"], reverse=True)
+            
             st.dataframe(
-                results, 
+                data,
                 column_config={
-                    "RT %": st.column_config.TextColumn("Rotten Tomatoes", help="Tomatometer Score"),
-                    "Metascore": st.column_config.NumberColumn("Critic Score (0-100)", format="%d"),
+                    "Movie": st.column_config.TextColumn("Movie"),
+                    "True Rating": st.column_config.TextColumn("Avg Score (x/10)", width="medium"),
+                    "_sort": None
                 },
                 hide_index=True,
                 use_container_width=True
