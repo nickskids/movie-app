@@ -14,41 +14,19 @@ except:
     st.error("SerpApi Key not found! Please add it to Streamlit Secrets.")
     st.stop()
 
-# --- THEATER LIST (With Fandango Slugs) ---
-# We map the name to both Zip (for Google) and Fandango URL Slug (for Future Checks)
+# --- THEATER LIST ---
 THEATERS = {
-    "AMC DINE-IN Levittown 10": {
-        "zip": "11756",
-        "slug": "amc-dine-in-levittown-10-aabqm"
-    },
-    "AMC Raceway 10 (Westbury)": {
-        "zip": "11590",
-        "slug": "amc-raceway-10-aabsx"
-    },
-    "AMC Roosevelt Field 8": {
-        "zip": "11530",
-        "slug": "amc-roosevelt-field-8-aabqp"
-    },
-    "AMC DINE-IN Huntington Square 12": {
-        "zip": "11731",
-        "slug": "amc-dine-in-huntington-square-12-aayrz"
-    },
-    "AMC Stony Brook 17": {
-        "zip": "11790",
-        "slug": "amc-loews-stony-brook-17-aalat"
-    },
-    "AMC Fresh Meadows 7": {
-        "zip": "11365",
-        "slug": "amc-loews-fresh-meadows-7-aabtm"
-    }
+    "AMC DINE-IN Levittown 10": "11756",
+    "AMC Raceway 10 (Westbury)": "11590",
+    "AMC Roosevelt Field 8": "11530",
+    "AMC DINE-IN Huntington Square 12": "11731",
+    "AMC Stony Brook 17": "11790",
+    "AMC Fresh Meadows 7": "11365"
 }
 
 # --- HEADERS ---
-# Fandango requires a very specific "Browser Disguise" to let us in
 HEADERS = {
-    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
-    "Referer": "https://www.google.com/"
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
 }
 
 # --- FUNCTIONS ---
@@ -83,74 +61,72 @@ def run_search_query(query):
     except:
         return []
 
-def scrape_fandango(slug, date_iso):
+def scrape_rt_national_forecast():
     """
-    Method B (Next Thursday): Connects to FANDANGO.
-    Extracts movie titles from the page source.
+    Method B (Upcoming): Scrapes Rotten Tomatoes 'Coming Soon' + 'Popular'.
+    Returns a list of dicts: {'title': 'Name', 'link': 'url'}
     """
-    # URL Pattern: fandango.com/{slug}/theater-page?date=2025-01-08
-    url = f"https://www.fandango.com/{slug}/theater-page"
-    params = {"date": date_iso, "format": "all"}
+    movies = []
+    seen_titles = set()
     
+    # 1. GET "POPULAR" (The Holdovers)
     try:
-        response = requests.get(url, headers=HEADERS, params=params, timeout=5)
+        url_pop = "https://www.rottentomatoes.com/browse/movies_in_theaters/sort:popular"
+        res_pop = requests.get(url_pop, headers=HEADERS, timeout=5)
+        if res_pop.status_code == 200:
+            matches = re.findall(r'<a href="(/m/[^"]+)"[^>]*>.*?<span class="p--small">([^<]+)</span>', res_pop.text, re.DOTALL)
+            for link, title in matches[:15]: # Expanded to top 15 to catch more
+                clean_title = title.strip()
+                if clean_title not in seen_titles:
+                    movies.append({
+                        "title": clean_title,
+                        "link": f"https://www.rottentomatoes.com{link}",
+                        "type": "Popular"
+                    })
+                    seen_titles.add(clean_title)
+    except:
+        pass
+
+    # 2. GET "COMING SOON" (The New Stuff)
+    try:
+        url_soon = "https://www.rottentomatoes.com/browse/movies_in_theaters/coming_soon"
+        res_soon = requests.get(url_soon, headers=HEADERS, timeout=5)
+        if res_soon.status_code == 200:
+            matches = re.findall(r'<a href="(/m/[^"]+)"[^>]*>.*?<span class="p--small">([^<]+)</span>', res_soon.text, re.DOTALL)
+            for link, title in matches[:10]:
+                clean_title = title.strip()
+                if clean_title not in seen_titles:
+                    movies.append({
+                        "title": clean_title,
+                        "link": f"https://www.rottentomatoes.com{link}",
+                        "type": "New Release"
+                    })
+                    seen_titles.add(clean_title)
+    except:
+        pass
         
-        if response.status_code == 200:
-            html = response.text
-            movies = set()
-            
-            # Fandango Logic 1: Look for JSON data (Schema.org)
-            json_matches = re.findall(r'<script type="application/ld\+json">(.*?)</script>', html, re.DOTALL)
-            for json_str in json_matches:
-                try:
-                    data = json.loads(json_str)
-                    if isinstance(data, dict) and data.get("@type") == "Movie":
-                        if "name" in data:
-                            movies.add(data["name"])
-                    if isinstance(data, list):
-                        for item in data:
-                            if item.get("@type") == "Movie" and "name" in item:
-                                movies.add(item["name"])
-                except:
-                    pass
-            
-            # Fandango Logic 2: Regex for Title Headers (Backup)
-            # Fandango usually puts titles in links like <a class="dark" href="...">Title</a>
-            regex_titles = re.findall(r'<a[^>]*class="dark"[^>]*>([^<]+)</a>', html)
-            for t in regex_titles:
-                if len(t) > 1 and "See All" not in t: # Filter out navigation links
-                    movies.add(t.strip())
+    return movies
 
-            return list(movies)
-        else:
-            print(f"Fandango Blocked: {response.status_code}")
-            return []
-            
-    except Exception as e:
-        print(f"Fandango Scrape Error: {e}")
-        return []
-
-def get_movies_at_theater(theater_name, target_date_iso=None):
+def get_movies_at_theater(theater_name, use_national_forecast=False):
     """
-    Decides whether to use Google (Today) or Fandango (Future).
+    Decides whether to use Google (Today) or RT Forecast (Upcoming).
     """
-    theater_info = THEATERS[theater_name]
+    zip_code = THEATERS[theater_name]
     
-    if target_date_iso:
-        # FUTURE MODE -> USE FANDANGO
-        return scrape_fandango(theater_info["slug"], target_date_iso)
+    if use_national_forecast:
+        # UPCOMING MODE -> RT FORECAST (Returns Dicts with Links)
+        return scrape_rt_national_forecast()
     else:
-        # TODAY MODE -> USE GOOGLE (Reliable for current times)
-        zip_code = theater_info["zip"]
+        # TODAY MODE -> GOOGLE (Returns Strings)
         query = f"movies playing at {theater_name} {zip_code}"
-        movies = run_search_query(query)
+        titles = run_search_query(query)
         
         # Late night safety net
-        if len(set(movies)) < 4:
-            movies_tomorrow = run_search_query(f"movies playing at {theater_name} {zip_code} tomorrow")
-            movies.extend(movies_tomorrow)
+        if len(set(titles)) < 4:
+            titles_tomorrow = run_search_query(f"movies playing at {theater_name} {zip_code} tomorrow")
+            titles.extend(titles_tomorrow)
             
-        return list(set(movies))
+        return list(set(titles))
 
 def guess_rt_url(title):
     """Checks years (2025-2028) first to handle Remakes/Reboots."""
@@ -212,23 +188,6 @@ def scrape_rt_source(url):
         pass
     return "N/A"
 
-def get_next_thursday_iso():
-    """
-    Returns TWO formats:
-    1. Display: "January 8"
-    2. ISO: "2026-01-08" (Required for Fandango URL)
-    """
-    today = datetime.date.today()
-    days_ahead = 3 - today.weekday()
-    if days_ahead <= 0: 
-        days_ahead += 7
-    next_thurs = today + datetime.timedelta(days=days_ahead)
-    
-    display_fmt = next_thurs.strftime("%B ") + str(next_thurs.day)
-    iso_fmt = next_thurs.isoformat() # Returns YYYY-MM-DD
-    
-    return display_fmt, iso_fmt
-
 # --- APP INTERFACE ---
 st.title("🍿 True Critic Ratings")
 st.caption("Select a theater below to see real critic scores.")
@@ -239,47 +198,66 @@ with st.sidebar:
     
     st.markdown("---")
     
-    # Date Toggle
-    date_mode = st.radio("When to check?", ["Today", "Next Thursday"], horizontal=True)
+    # UPDATED: Date Toggle with new Label
+    date_mode = st.radio("When to check?", ["Today", "Upcoming Movies"], horizontal=True)
     
-    target_iso = None
-    target_display = None
+    use_forecast = False
     
-    if date_mode == "Next Thursday":
-        target_display, target_iso = get_next_thursday_iso()
-        st.info(f"Checking for: **Thursday, {target_display}**")
-        st.warning("Future Mode: Checking Fandango... (0 Credits)")
+    if date_mode == "Upcoming Movies":
+        use_forecast = True
+        st.info(f"Showing: **National Top 25**")
+        st.warning("National Forecast Mode: Shows Popular & Coming Soon movies nationwide. (0 Credits)")
     else:
         st.info(f"Checking: **{selected_theater_name}**")
         st.caption("Using Google Search (1 Credit)")
 
 if st.button("Get True Ratings", type="primary"):
-    with st.spinner(f"Checking schedule..."):
-        # 1. Get Movies (Logic split inside function)
-        movies = get_movies_at_theater(selected_theater_name, target_iso)
+    with st.spinner(f"Building schedule..."):
         
-        if not movies:
-             st.error("No movies found. Fandango might be blocking the request or the schedule isn't live yet.")
+        # 1. Get Movies
+        raw_results = get_movies_at_theater(selected_theater_name, use_forecast)
+        
+        if not raw_results:
+             st.error("Could not fetch movie list.")
         else:
-            st.info(f"Found {len(movies)} movies. Hunting for ratings...")
+            st.info(f"Found {len(raw_results)} movies. Getting scores...")
             
             data = []
             progress = st.progress(0)
             status_text = st.empty()
             
-            for i, movie in enumerate(movies):
-                status_text.text(f"Checking: {movie}")
+            for i, item in enumerate(raw_results):
+                # Handle data format differences
+                if isinstance(item, dict):
+                    # Upcoming Mode (We already have the link!)
+                    movie_title = item["title"]
+                    rt_url = item["link"]
+                    method = "Direct Link (RT)"
+                else:
+                    # Today Mode (We just have the name)
+                    movie_title = item
+                    rt_url = None
+                    method = "Scanning..."
+
+                status_text.text(f"Checking: {movie_title}")
                 
-                # Phase 1: Free Guess
-                url = guess_rt_url(movie)
-                method = "Free Guess"
-                rating = scrape_rt_source(url)
+                # Logic Flow
+                rating = "N/A"
                 
-                # Phase 2: Paid Fallback (CONDITIONAL)
-                if rating == "N/A" and date_mode == "Today":
-                    url = find_rt_url_paid(movie)
-                    method = "Paid Search"
-                    rating = scrape_rt_source(url)
+                if rt_url:
+                    # We have the link, just scrape it
+                    rating = scrape_rt_source(rt_url)
+                else:
+                    # We need to find the link first
+                    rt_url = guess_rt_url(movie_title)
+                    method = "Free Guess"
+                    rating = scrape_rt_source(rt_url)
+                    
+                    # Paid Fallback (Only for Today mode)
+                    if rating == "N/A" and date_mode == "Today":
+                        rt_url = find_rt_url_paid(movie_title)
+                        method = "Paid Search"
+                        rating = scrape_rt_source(rt_url)
                 
                 sort_val = 0.0
                 try:
@@ -288,13 +266,13 @@ if st.button("Get True Ratings", type="primary"):
                     pass
                 
                 data.append({
-                    "Movie": movie,
+                    "Movie": movie_title,
                     "True Rating": rating,
                     "Source": method,
                     "_sort": sort_val,
-                    "Link": url
+                    "Link": rt_url
                 })
-                progress.progress((i + 1) / len(movies))
+                progress.progress((i + 1) / len(raw_results))
             
             progress.empty()
             status_text.empty()
