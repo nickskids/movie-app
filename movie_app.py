@@ -47,7 +47,7 @@ def run_search_query(query, match_date_string=None):
         specific_movies = []
         fallback_movies = []
         
-        # 1. SCAN FOR SPECIFIC DATE (The Priority)
+        # 1. SCAN FOR SPECIFIC DATE
         if match_date_string and "showtimes" in results:
             for day_block in results["showtimes"]:
                 day_header = day_block.get("day", "").lower()
@@ -58,9 +58,9 @@ def run_search_query(query, match_date_string=None):
         
         # 2. IF FOUND, RETURN IMMEDIATELY
         if specific_movies:
-            return specific_movies, False  # False = Not a fallback
+            return specific_movies, False
             
-        # 3. IF NOT FOUND, GRAB FALLBACK (Today/Knowledge Graph)
+        # 3. IF NOT FOUND, GRAB FALLBACK
         if "knowledge_graph" in results and "movies_playing" in results["knowledge_graph"]:
             for m in results["knowledge_graph"]["movies_playing"]:
                 fallback_movies.append(m["name"])
@@ -72,26 +72,20 @@ def run_search_query(query, match_date_string=None):
                          fallback_movies.append(m["name"])
                      break 
         
-        return list(set(fallback_movies)), True # True = This IS a fallback
+        return list(set(fallback_movies)), True
 
     except:
         return [], False
 
 def get_movies_at_theater(theater_name, location, target_date_short=None, target_date_long=None):
-    """
-    Orchestrates the search. Returns: (movies, is_fallback_mode)
-    """
     if target_date_long:
-        # SEARCH FUTURE
         query = f"showtimes for {theater_name} {location} on {target_date_long}"
         movies, is_fallback = run_search_query(query, match_date_string=target_date_short)
         return movies, is_fallback
     else:
-        # SEARCH TODAY
         query = f"movies playing at {theater_name} {location}"
         movies, _ = run_search_query(query)
         
-        # Late Night Safety Net
         if len(set(movies)) < 4:
             movies_tomorrow, _ = run_search_query(f"movies playing at {theater_name} {location} tomorrow")
             movies.extend(movies_tomorrow)
@@ -99,22 +93,15 @@ def get_movies_at_theater(theater_name, location, target_date_short=None, target
         return list(set(movies)), False
 
 def guess_rt_url(title):
-    """
-    FUTURE-PROOF LOGIC:
-    Checks Current Year +/- 1 dynamically.
-    (e.g. In 2026, checks 2027, 2026, 2025)
-    """
     clean_title = re.sub(r'[^\w\s]', '', title).lower()
     slug = re.sub(r'\s+', '_', clean_title)
-    
     current_year = datetime.date.today().year
     
-    # Dynamic list: Next Year -> Current Year -> Last Year -> Standard
     potential_urls = [
         f"https://www.rottentomatoes.com/m/{slug}_{current_year + 1}",
         f"https://www.rottentomatoes.com/m/{slug}_{current_year}",
         f"https://www.rottentomatoes.com/m/{slug}_{current_year - 1}",
-        f"https://www.rottentomatoes.com/m/{slug}" # Standard (No year)
+        f"https://www.rottentomatoes.com/m/{slug}"
     ]
     
     for url in potential_urls:
@@ -145,22 +132,44 @@ def find_rt_url_paid(title):
     return None
 
 def scrape_rt_source(url):
-    if not url: return "N/A"
+    """
+    Extracts TWO values:
+    1. Average Rating (e.g. "8.8/10")
+    2. Review Count (e.g. "245")
+    """
+    if not url: return "N/A", "N/A"
+    
     try:
         response = requests.get(url, headers=HEADERS, timeout=5)
         if response.status_code == 200:
             html = response.text
-            pattern = r'"criticsAll"\s*:\s*\{[^}]*"averageRating"\s*:\s*"(\d+\.?\d*)"'
-            match = re.search(pattern, html)
-            if match:
-                return f"{match.group(1)}/10"
-            backup = r'"criticsScore"\s*:\s*\{[^}]*"averageRating"\s*:\s*"(\d+\.?\d*)"'
-            match_back = re.search(backup, html)
-            if match_back:
-                return f"{match_back.group(1)}/10"
+            
+            rating = "N/A"
+            count = "N/A"
+            
+            # Regex for RATING
+            # Looks for "averageRating":"8.8" inside criticsAll block
+            match_rating = re.search(r'"criticsAll"\s*:\s*\{[^}]*?"averageRating"\s*:\s*"(\d+\.?\d*)"', html)
+            if match_rating:
+                rating = f"{match_rating.group(1)}/10"
+                
+            # Regex for REVIEW COUNT
+            # Looks for "reviewCount":123 inside criticsAll block
+            match_count = re.search(r'"criticsAll"\s*:\s*\{[^}]*?"reviewCount"\s*:\s*(\d+)', html)
+            if match_count:
+                count = match_count.group(1)
+            
+            # Backup: Check "criticsScore" block if criticsAll fails
+            if rating == "N/A":
+                 match_rating_back = re.search(r'"criticsScore"\s*:\s*\{[^}]*?"averageRating"\s*:\s*"(\d+\.?\d*)"', html)
+                 if match_rating_back: rating = f"{match_rating_back.group(1)}/10"
+
+            return rating, count
+            
     except:
         pass
-    return "N/A"
+        
+    return "N/A", "N/A"
 
 def get_next_thursday_data():
     today = datetime.date.today()
@@ -201,14 +210,11 @@ with st.sidebar:
 if st.button("Get True Ratings", type="primary"):
     with st.spinner(f"Checking schedule..."):
         
-        # 1. Get Movies (Tuple: list, is_fallback)
         movies, is_fallback = get_movies_at_theater(selected_theater_name, selected_zip, target_short, target_long)
         
-        # 2. Handle Logic
         if not movies:
             st.error("No movies found at all.")
         else:
-            # CHECK IF FALLBACK HAPPENED
             if is_fallback:
                 st.warning(f"⚠️ Schedule for **{target_long}** is not posted yet. Showing **Today's** movies so your credit isn't wasted.")
             else:
@@ -217,7 +223,6 @@ if st.button("Get True Ratings", type="primary"):
                 else:
                     st.info(f"Found {len(movies)} movies.")
 
-            # 3. Process Ratings
             data = []
             progress = st.progress(0)
             status_text = st.empty()
@@ -228,13 +233,14 @@ if st.button("Get True Ratings", type="primary"):
                 # Phase 1: Free Guess
                 url = guess_rt_url(movie)
                 method = "Free Guess"
-                rating = scrape_rt_source(url)
+                # Scrape both rating and count
+                rating, count = scrape_rt_source(url)
                 
-                # Phase 2: Paid Fallback (CONDITIONAL)
+                # Phase 2: Paid Fallback
                 if rating == "N/A" and (date_mode == "Today" or is_fallback):
                     url = find_rt_url_paid(movie)
                     method = "Paid Search"
-                    rating = scrape_rt_source(url)
+                    rating, count = scrape_rt_source(url)
                 
                 sort_val = 0.0
                 try:
@@ -245,6 +251,7 @@ if st.button("Get True Ratings", type="primary"):
                 data.append({
                     "Movie": movie,
                     "True Rating": rating,
+                    "Reviews": count,  # New Field
                     "Source": method,
                     "_sort": sort_val,
                     "Link": url
@@ -255,12 +262,14 @@ if st.button("Get True Ratings", type="primary"):
             status_text.empty()
             data.sort(key=lambda x: x["_sort"], reverse=True)
             
+            # Display with new column
             st.dataframe(
                 data,
-                column_order=["Movie", "True Rating", "Source", "Link"], 
+                column_order=["Movie", "True Rating", "Reviews", "Source", "Link"], 
                 column_config={
                     "Movie": st.column_config.TextColumn("Movie", width="medium"),
                     "True Rating": st.column_config.TextColumn("Score", width="small"),
+                    "Reviews": st.column_config.TextColumn("Count", width="small"), # New Column Config
                     "Source": st.column_config.TextColumn("Method", width="small"),
                     "Link": st.column_config.LinkColumn("Verify"),
                     "_sort": None
