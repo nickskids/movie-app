@@ -12,7 +12,7 @@ except:
     st.error("SerpApi Key not found! Please add it to Streamlit Secrets.")
     st.stop()
 
-# --- HELPER: HEADER FOR FAKING A BROWSER ---
+# --- HEADERS ---
 HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
 }
@@ -44,29 +44,40 @@ def get_movies_at_theater(theater_name, location):
                     break
         
         return list(set(movie_titles))
-    except Exception as e:
+    except:
         return []
 
-def get_rt_url_smart(title):
+def guess_rt_url(title):
     """
-    1. Tries to GUESS the URL (Free).
-    2. If guess fails, USES SEARCH (1 Credit).
+    FUTURE-PROOF LOGIC:
+    Checks specific years first to handle Remakes/Reboots.
     """
-    # Clean title for URL guessing
     clean_title = re.sub(r'[^\w\s]', '', title).lower()
     slug = re.sub(r'\s+', '_', clean_title)
     
-    guessed_url = f"https://www.rottentomatoes.com/m/{slug}"
+    # Updated List: 2025 -> 2028
+    # We check these FIRST so we don't accidentally grab an old 1990s movie.
+    potential_urls = [
+        f"https://www.rottentomatoes.com/m/{slug}_2025",
+        f"https://www.rottentomatoes.com/m/{slug}_2026",
+        f"https://www.rottentomatoes.com/m/{slug}_2027",
+        f"https://www.rottentomatoes.com/m/{slug}_2028",
+        f"https://www.rottentomatoes.com/m/{slug}" # Standard (No conflict)
+    ]
     
-    # Try the free guess
-    try:
-        response = requests.get(guessed_url, headers=HEADERS, timeout=2)
-        if response.status_code == 200:
-            return guessed_url, "Free Guess"
-    except:
-        pass
+    for url in potential_urls:
+        try:
+            # Timeout lowered to 0.5s to keep the app fast while checking many years
+            response = requests.get(url, headers=HEADERS, timeout=0.5)
+            if response.status_code == 200:
+                return url
+        except:
+            pass
 
-    # Fallback to Paid Search
+    return None
+
+def find_rt_url_paid(title):
+    """Uses Google Search to find the exact URL (Costs 1 Credit)."""
     params = {
         "engine": "google",
         "q": f"{title} rotten tomatoes movie",
@@ -79,39 +90,40 @@ def get_rt_url_smart(title):
             for result in results["organic_results"]:
                 link = result.get("link", "")
                 if "rottentomatoes.com/m/" in link:
-                    return link, "Paid Search"
+                    return link
     except:
         pass
-        
-    return None, "Failed"
+    return None
 
 def scrape_rt_source(url):
-    """Downloads source and finds 'criticsAll':{'averageRating':'8.8'}"""
+    """Extracts 'criticsAll':{'averageRating':'8.8'} from source."""
+    if not url: return "N/A"
+    
     try:
         response = requests.get(url, headers=HEADERS, timeout=5)
         if response.status_code == 200:
             html = response.text
             
-            # The specific JSON pattern
+            # Primary Pattern
             pattern = r'"criticsAll"\s*:\s*\{[^}]*"averageRating"\s*:\s*"(\d+\.?\d*)"'
             match = re.search(pattern, html)
             if match:
                 return f"{match.group(1)}/10"
             
-            # Backup pattern
+            # Backup Pattern
             backup = r'"criticsScore"\s*:\s*\{[^}]*"averageRating"\s*:\s*"(\d+\.?\d*)"'
             match_back = re.search(backup, html)
             if match_back:
                 return f"{match_back.group(1)}/10"
 
-    except Exception as e:
-        print(f"Scrape Error: {e}")
+    except:
+        pass
         
     return "N/A"
 
 # --- APP INTERFACE ---
 st.title("🍿 True Critic Ratings")
-st.caption("Now with 'Smart Guessing' to save your API credits.")
+st.caption("Updated: Checks 2025-2028 first to ensure future accuracy.")
 
 with st.sidebar:
     st.header("Settings")
@@ -135,13 +147,16 @@ if st.button("Get True Ratings", type="primary"):
             for i, movie in enumerate(movies):
                 status_text.text(f"Checking: {movie}")
                 
-                # 2. Smart Find URL
-                rt_url, method = get_rt_url_smart(movie)
-                rating = "N/A"
+                # Phase 1: Future-Proof Guess
+                url = guess_rt_url(movie)
+                method = "Free Guess"
+                rating = scrape_rt_source(url)
                 
-                # 3. Scrape Source
-                if rt_url:
-                    rating = scrape_rt_source(rt_url)
+                # Phase 2: Fallback to Paid Search
+                if rating == "N/A":
+                    url = find_rt_url_paid(movie)
+                    method = "Paid Search"
+                    rating = scrape_rt_source(url)
                 
                 # Sorting helper
                 sort_val = 0.0
@@ -155,24 +170,23 @@ if st.button("Get True Ratings", type="primary"):
                     "True Rating": rating,
                     "Source": method,
                     "_sort": sort_val,
-                    "Link": rt_url
+                    "Link": url
                 })
                 progress.progress((i + 1) / len(movies))
             
             progress.empty()
             status_text.empty()
             
-            # Sort highest rating first
             data.sort(key=lambda x: x["_sort"], reverse=True)
             
-            # FORCE COLUMNS TO APPEAR
+            # Display
             st.dataframe(
                 data,
                 column_order=["Movie", "True Rating", "Source", "Link"], 
                 column_config={
                     "Movie": st.column_config.TextColumn("Movie", width="medium"),
                     "True Rating": st.column_config.TextColumn("Score", width="small"),
-                    "Source": st.column_config.TextColumn("Method", width="small", help="Free Guess vs Paid Search"),
+                    "Source": st.column_config.TextColumn("Method", width="small"),
                     "Link": st.column_config.LinkColumn("Verify"),
                     "_sort": None
                 },
