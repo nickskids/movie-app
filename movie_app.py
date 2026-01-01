@@ -12,6 +12,16 @@ except:
     st.error("SerpApi Key not found! Please add it to Streamlit Secrets.")
     st.stop()
 
+# --- THEATER LIST ---
+THEATERS = {
+    "AMC DINE-IN Levittown 10": "11756",
+    "AMC Raceway 10 (Westbury)": "11590",
+    "AMC Roosevelt Field 8": "11530",
+    "AMC DINE-IN Huntington Square 12": "11731",
+    "AMC Stony Brook 17": "11790",
+    "AMC Fresh Meadows 7": "11365"  # <-- Updated here
+}
+
 # --- HEADERS ---
 HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
@@ -50,12 +60,12 @@ def get_movies_at_theater(theater_name, location):
 def guess_rt_url(title):
     """
     FUTURE-PROOF LOGIC:
-    Checks specific years first to handle Remakes/Reboots.
+    Checks years (2025-2028) first to handle Remakes/Reboots.
     """
     clean_title = re.sub(r'[^\w\s]', '', title).lower()
     slug = re.sub(r'\s+', '_', clean_title)
     
-    # Updated List: 2025 -> 2028
+    # Priority: Check future/current years first
     potential_urls = [
         f"https://www.rottentomatoes.com/m/{slug}_2025",
         f"https://www.rottentomatoes.com/m/{slug}_2026",
@@ -66,8 +76,7 @@ def guess_rt_url(title):
     
     for url in potential_urls:
         try:
-            # INCREASED TIMEOUT: 0.5 -> 1.0
-            # This prevents "Zootopia 2" from failing just because the wifi blinked.
+            # Timeout 1.0s to balance speed vs reliability
             response = requests.get(url, headers=HEADERS, timeout=1.0)
             if response.status_code == 200:
                 return url
@@ -123,20 +132,30 @@ def scrape_rt_source(url):
 
 # --- APP INTERFACE ---
 st.title("🍿 True Critic Ratings")
-st.caption("Updated: Optimized connection timeout to save credits.")
+st.caption("Select a theater below to see real critic scores.")
 
 with st.sidebar:
     st.header("Settings")
-    theater = st.text_input("Theater", "AMC DINE-IN Levittown 10")
-    loc = st.text_input("Zip Code", "11756")
+    
+    # DROPDOWN MENU
+    selected_theater_name = st.selectbox(
+        "Choose Theater",
+        options=list(THEATERS.keys())
+    )
+    
+    # AUTOMATICALLY LOOK UP ZIP
+    selected_zip = THEATERS[selected_theater_name]
+    
+    st.info(f"Checking: **{selected_theater_name}**")
+    st.caption(f"(Zip: {selected_zip})")
 
 if st.button("Get True Ratings", type="primary"):
-    with st.spinner(f"Checking {theater}..."):
-        # 1. Find Movies (1 Credit)
-        movies = get_movies_at_theater(theater, loc)
+    with st.spinner(f"Checking showtimes for {selected_theater_name}..."):
+        # 1. Find Movies (Uses Theater Name + Zip)
+        movies = get_movies_at_theater(selected_theater_name, selected_zip)
         
         if not movies:
-            st.error("No movies found.")
+            st.error("No movies found. Please try again later.")
         else:
             st.info(f"Found {len(movies)} movies. Hunting for ratings...")
             
