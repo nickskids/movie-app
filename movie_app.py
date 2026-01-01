@@ -5,7 +5,8 @@ import datetime
 from serpapi import GoogleSearch
 
 # --- CONFIGURATION ---
-st.set_page_config(page_title="Theater Critic Check", page_icon="🍿", layout="wide")
+# The browser tab will still show the Tomato icon
+st.set_page_config(page_title="RT Critic Ratings", page_icon="🍅", layout="wide")
 
 try:
     SERPAPI_KEY = st.secrets["SERPAPI_KEY"]
@@ -61,19 +62,16 @@ def run_search_query(query, match_date_string=None):
             return specific_movies, False  # False = Not a fallback
             
         # 3. IF NOT FOUND, GRAB FALLBACK (Today/Knowledge Graph)
-        # Check Knowledge Graph (Always "Today")
         if "knowledge_graph" in results and "movies_playing" in results["knowledge_graph"]:
             for m in results["knowledge_graph"]["movies_playing"]:
                 fallback_movies.append(m["name"])
                 
-        # Check First Available Showtime Day (Usually Today)
         if not fallback_movies and "showtimes" in results:
-             # Just grab the very first day block we see
              for day_block in results["showtimes"]:
                  if "movies" in day_block:
                      for m in day_block["movies"]:
                          fallback_movies.append(m["name"])
-                     break # Only grab the first day
+                     break 
         
         return list(set(fallback_movies)), True # True = This IS a fallback
 
@@ -82,8 +80,7 @@ def run_search_query(query, match_date_string=None):
 
 def get_movies_at_theater(theater_name, location, target_date_short=None, target_date_long=None):
     """
-    Orchestrates the search.
-    Returns: (movies, is_fallback_mode)
+    Orchestrates the search. Returns: (movies, is_fallback_mode)
     """
     if target_date_long:
         # SEARCH FUTURE
@@ -93,7 +90,6 @@ def get_movies_at_theater(theater_name, location, target_date_short=None, target
     else:
         # SEARCH TODAY
         query = f"movies playing at {theater_name} {location}"
-        # We don't use fallback logic for "Today" because "Today" IS the fallback
         movies, _ = run_search_query(query)
         
         # Late Night Safety Net
@@ -173,8 +169,9 @@ def get_next_thursday_data():
     return short_fmt, long_fmt, days_ahead
 
 # --- APP INTERFACE ---
-st.title("🍿 True Critic Ratings")
-st.caption("Select a theater below to see real critic scores.")
+# UPDATED: New Title and Caption per your request
+st.title("🍅 Rotten Tomatoes All Critics Average Ratings")
+st.caption("Select a theater in the **sidebar menu** to see real critic scores.")
 
 with st.sidebar:
     st.header("Settings")
@@ -229,7 +226,6 @@ if st.button("Get True Ratings", type="primary"):
                 rating = scrape_rt_source(url)
                 
                 # Phase 2: Paid Fallback (CONDITIONAL)
-                # If we are in "Today" mode OR "Fallback" mode, we allow paid search for accuracy
                 if rating == "N/A" and (date_mode == "Today" or is_fallback):
                     url = find_rt_url_paid(movie)
                     method = "Paid Search"
@@ -245,25 +241,4 @@ if st.button("Get True Ratings", type="primary"):
                     "Movie": movie,
                     "True Rating": rating,
                     "Source": method,
-                    "_sort": sort_val,
-                    "Link": url
-                })
-                progress.progress((i + 1) / len(movies))
-            
-            progress.empty()
-            status_text.empty()
-            data.sort(key=lambda x: x["_sort"], reverse=True)
-            
-            st.dataframe(
-                data,
-                column_order=["Movie", "True Rating", "Source", "Link"], 
-                column_config={
-                    "Movie": st.column_config.TextColumn("Movie", width="medium"),
-                    "True Rating": st.column_config.TextColumn("Score", width="small"),
-                    "Source": st.column_config.TextColumn("Method", width="small"),
-                    "Link": st.column_config.LinkColumn("Verify"),
-                    "_sort": None
-                },
-                hide_index=True,
-                use_container_width=True
-            )
+                    "_sort": sort_val
