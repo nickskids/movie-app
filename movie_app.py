@@ -5,7 +5,6 @@ import datetime
 from serpapi import GoogleSearch
 
 # --- CONFIGURATION ---
-# The browser tab will still show the Tomato icon
 st.set_page_config(page_title="RT Critic Ratings", page_icon="🍅", layout="wide")
 
 try:
@@ -100,15 +99,22 @@ def get_movies_at_theater(theater_name, location, target_date_short=None, target
         return list(set(movies)), False
 
 def guess_rt_url(title):
+    """
+    FUTURE-PROOF LOGIC:
+    Checks Current Year +/- 1 dynamically.
+    (e.g. In 2026, checks 2027, 2026, 2025)
+    """
     clean_title = re.sub(r'[^\w\s]', '', title).lower()
     slug = re.sub(r'\s+', '_', clean_title)
     
+    current_year = datetime.date.today().year
+    
+    # Dynamic list: Next Year -> Current Year -> Last Year -> Standard
     potential_urls = [
-        f"https://www.rottentomatoes.com/m/{slug}_2025",
-        f"https://www.rottentomatoes.com/m/{slug}_2026",
-        f"https://www.rottentomatoes.com/m/{slug}_2027",
-        f"https://www.rottentomatoes.com/m/{slug}_2028",
-        f"https://www.rottentomatoes.com/m/{slug}"
+        f"https://www.rottentomatoes.com/m/{slug}_{current_year + 1}",
+        f"https://www.rottentomatoes.com/m/{slug}_{current_year}",
+        f"https://www.rottentomatoes.com/m/{slug}_{current_year - 1}",
+        f"https://www.rottentomatoes.com/m/{slug}" # Standard (No year)
     ]
     
     for url in potential_urls:
@@ -169,7 +175,6 @@ def get_next_thursday_data():
     return short_fmt, long_fmt, days_ahead
 
 # --- APP INTERFACE ---
-# UPDATED: New Title and Caption per your request
 st.title("🍅 Rotten Tomatoes All Critics Average Ratings")
 st.caption("Select a theater in the **sidebar menu** to see real critic scores.")
 
@@ -241,4 +246,25 @@ if st.button("Get True Ratings", type="primary"):
                     "Movie": movie,
                     "True Rating": rating,
                     "Source": method,
-                    "_sort": sort_val
+                    "_sort": sort_val,
+                    "Link": url
+                })
+                progress.progress((i + 1) / len(movies))
+            
+            progress.empty()
+            status_text.empty()
+            data.sort(key=lambda x: x["_sort"], reverse=True)
+            
+            st.dataframe(
+                data,
+                column_order=["Movie", "True Rating", "Source", "Link"], 
+                column_config={
+                    "Movie": st.column_config.TextColumn("Movie", width="medium"),
+                    "True Rating": st.column_config.TextColumn("Score", width="small"),
+                    "Source": st.column_config.TextColumn("Method", width="small"),
+                    "Link": st.column_config.LinkColumn("Verify"),
+                    "_sort": None
+                },
+                hide_index=True,
+                use_container_width=True
+            )
