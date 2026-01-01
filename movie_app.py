@@ -14,41 +14,41 @@ except:
     st.error("SerpApi Key not found! Please add it to Streamlit Secrets.")
     st.stop()
 
-# --- THEATER LIST (With AMC URL Slugs) ---
-# We map the name to both Zip (for Google) and Slug (for AMC Direct)
+# --- THEATER LIST (With Fandango Slugs) ---
+# We map the name to both Zip (for Google) and Fandango URL Slug (for Future Checks)
 THEATERS = {
     "AMC DINE-IN Levittown 10": {
         "zip": "11756",
-        "slug": "new-york-city/amc-dine-in-levittown-10"
+        "slug": "amc-dine-in-levittown-10-aabqm"
     },
     "AMC Raceway 10 (Westbury)": {
         "zip": "11590",
-        "slug": "new-york-city/amc-raceway-10"
+        "slug": "amc-raceway-10-aabsx"
     },
     "AMC Roosevelt Field 8": {
         "zip": "11530",
-        "slug": "new-york-city/amc-roosevelt-field-8"
+        "slug": "amc-roosevelt-field-8-aabqp"
     },
     "AMC DINE-IN Huntington Square 12": {
         "zip": "11731",
-        "slug": "new-york-city/amc-dine-in-huntington-square-12"
+        "slug": "amc-dine-in-huntington-square-12-aayrz"
     },
     "AMC Stony Brook 17": {
         "zip": "11790",
-        "slug": "new-york-city/amc-stony-brook-17"
+        "slug": "amc-loews-stony-brook-17-aalat"
     },
     "AMC Fresh Meadows 7": {
         "zip": "11365",
-        "slug": "new-york-city/amc-fresh-meadows-7"
+        "slug": "amc-loews-fresh-meadows-7-aabtm"
     }
 }
 
 # --- HEADERS ---
-# We need a robust User-Agent so AMC doesn't block the request
+# Fandango requires a very specific "Browser Disguise" to let us in
 HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
     "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
-    "Accept-Language": "en-US,en;q=0.5"
+    "Referer": "https://www.google.com/"
 }
 
 # --- FUNCTIONS ---
@@ -83,41 +83,30 @@ def run_search_query(query):
     except:
         return []
 
-def scrape_amc_direct(slug, date_iso):
+def scrape_fandango(slug, date_iso):
     """
-    Method B (Next Thursday): Connects directly to AMC's website.
-    scrapes the hidden Schema.org JSON data to find movies.
+    Method B (Next Thursday): Connects to FANDANGO.
+    Extracts movie titles from the page source.
     """
-    url = f"https://www.amctheatres.com/movie-theatres/{slug}/showtimes"
-    # We append the date parameter
-    params = {"date": date_iso}
+    # URL Pattern: fandango.com/{slug}/theater-page?date=2025-01-08
+    url = f"https://www.fandango.com/{slug}/theater-page"
+    params = {"date": date_iso, "format": "all"}
     
     try:
         response = requests.get(url, headers=HEADERS, params=params, timeout=5)
+        
         if response.status_code == 200:
             html = response.text
             movies = set()
             
-            # AMC embeds data in <script type="application/ld+json">
-            # We look for that specific pattern
+            # Fandango Logic 1: Look for JSON data (Schema.org)
             json_matches = re.findall(r'<script type="application/ld\+json">(.*?)</script>', html, re.DOTALL)
-            
             for json_str in json_matches:
                 try:
                     data = json.loads(json_str)
-                    # Check if this JSON block is a Movie or ScreeningEvent
-                    if isinstance(data, dict):
-                        # Pattern 1: Direct "Movie" object
-                        if data.get("@type") == "Movie" and "name" in data:
+                    if isinstance(data, dict) and data.get("@type") == "Movie":
+                        if "name" in data:
                             movies.add(data["name"])
-                        
-                        # Pattern 2: "ScreeningEvent" which contains "workPresented"
-                        if data.get("@type") == "ScreeningEvent":
-                            work = data.get("workPresented", {})
-                            if "name" in work:
-                                movies.add(work["name"])
-                                
-                    # Sometimes it's a list of objects
                     if isinstance(data, list):
                         for item in data:
                             if item.get("@type") == "Movie" and "name" in item:
@@ -125,30 +114,31 @@ def scrape_amc_direct(slug, date_iso):
                 except:
                     pass
             
-            # FALLBACK: If JSON parsing fails, regex scan for Title Headers
-            if not movies:
-                # AMC often uses an aria-label or class for titles
-                regex_titles = re.findall(r'class="MovieTitleHeader"[^>]*>([^<]+)</a>', html)
-                for t in regex_titles:
+            # Fandango Logic 2: Regex for Title Headers (Backup)
+            # Fandango usually puts titles in links like <a class="dark" href="...">Title</a>
+            regex_titles = re.findall(r'<a[^>]*class="dark"[^>]*>([^<]+)</a>', html)
+            for t in regex_titles:
+                if len(t) > 1 and "See All" not in t: # Filter out navigation links
                     movies.add(t.strip())
-            
+
             return list(movies)
+        else:
+            print(f"Fandango Blocked: {response.status_code}")
+            return []
             
     except Exception as e:
-        print(f"AMC Scrape Error: {e}")
+        print(f"Fandango Scrape Error: {e}")
         return []
-    
-    return []
 
 def get_movies_at_theater(theater_name, target_date_iso=None):
     """
-    Decides whether to use Google (Today) or AMC Direct (Future).
+    Decides whether to use Google (Today) or Fandango (Future).
     """
     theater_info = THEATERS[theater_name]
     
     if target_date_iso:
-        # FUTURE MODE -> USE AMC DIRECT
-        return scrape_amc_direct(theater_info["slug"], target_date_iso)
+        # FUTURE MODE -> USE FANDANGO
+        return scrape_fandango(theater_info["slug"], target_date_iso)
     else:
         # TODAY MODE -> USE GOOGLE (Reliable for current times)
         zip_code = theater_info["zip"]
@@ -226,7 +216,7 @@ def get_next_thursday_iso():
     """
     Returns TWO formats:
     1. Display: "January 8"
-    2. ISO: "2026-01-08" (Required for AMC URL)
+    2. ISO: "2026-01-08" (Required for Fandango URL)
     """
     today = datetime.date.today()
     days_ahead = 3 - today.weekday()
@@ -258,7 +248,7 @@ with st.sidebar:
     if date_mode == "Next Thursday":
         target_display, target_iso = get_next_thursday_iso()
         st.info(f"Checking for: **Thursday, {target_display}**")
-        st.warning("Future Mode: Connecting directly to AMC (Saves Credits!)")
+        st.warning("Future Mode: Checking Fandango... (0 Credits)")
     else:
         st.info(f"Checking: **{selected_theater_name}**")
         st.caption("Using Google Search (1 Credit)")
@@ -269,7 +259,7 @@ if st.button("Get True Ratings", type="primary"):
         movies = get_movies_at_theater(selected_theater_name, target_iso)
         
         if not movies:
-             st.error("No movies found. If checking Next Thursday, AMC might be blocking the request or the schedule isn't live yet.")
+             st.error("No movies found. Fandango might be blocking the request or the schedule isn't live yet.")
         else:
             st.info(f"Found {len(movies)} movies. Hunting for ratings...")
             
