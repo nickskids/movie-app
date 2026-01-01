@@ -19,7 +19,7 @@ THEATERS = {
     "AMC Roosevelt Field 8": "11530",
     "AMC DINE-IN Huntington Square 12": "11731",
     "AMC Stony Brook 17": "11790",
-    "AMC Fresh Meadows 7": "11365"  # <-- Updated here
+    "AMC Fresh Meadows 7": "11365"
 }
 
 # --- HEADERS ---
@@ -28,9 +28,8 @@ HEADERS = {
 }
 
 # --- FUNCTIONS ---
-def get_movies_at_theater(theater_name, location):
-    """Finds what movies are playing (Costs 1 Search Credit)."""
-    query = f"movies playing at {theater_name} {location}"
+def run_search_query(query):
+    """Helper: Runs a single Google Search and returns movie titles."""
     params = {
         "engine": "google",
         "q": query,
@@ -41,21 +40,41 @@ def get_movies_at_theater(theater_name, location):
     try:
         search = GoogleSearch(params)
         results = search.get_dict()
-        movie_titles = []
+        titles = []
         
+        # Method A: Knowledge Graph (The Carousel - Best source)
         if "knowledge_graph" in results and "movies_playing" in results["knowledge_graph"]:
             for m in results["knowledge_graph"]["movies_playing"]:
-                movie_titles.append(m["name"])
+                titles.append(m["name"])
+        
+        # Method B: Showtimes List (Fallback)
         elif "showtimes" in results:
             for day in results["showtimes"]:
                 if "movies" in day:
                     for m in day["movies"]:
-                        movie_titles.append(m["name"])
-                    break
-        
-        return list(set(movie_titles))
+                        titles.append(m["name"])
+                # We remove the 'break' here to grab all days available in the JSON
+    
+        return titles
     except:
         return []
+
+def get_movies_at_theater(theater_name, location):
+    """
+    Finds movies. 
+    LATE NIGHT FIX: If 'Today' has < 4 movies, we verify with 'Tomorrow' to ensure full list.
+    """
+    # 1. Search Today
+    movies = run_search_query(f"movies playing at {theater_name} {location}")
+    
+    # 2. Safety Net: If list is suspicious (too short), check Tomorrow
+    # This fixes the "11 PM Bug" where finished movies disappear.
+    if len(set(movies)) < 4:
+        st.toast(f"Late night check: Verifying schedule with tomorrow's listings...")
+        movies_tomorrow = run_search_query(f"movies playing at {theater_name} {location} tomorrow")
+        movies.extend(movies_tomorrow)
+    
+    return list(set(movies))
 
 def guess_rt_url(title):
     """
@@ -65,24 +84,22 @@ def guess_rt_url(title):
     clean_title = re.sub(r'[^\w\s]', '', title).lower()
     slug = re.sub(r'\s+', '_', clean_title)
     
-    # Priority: Check future/current years first
     potential_urls = [
         f"https://www.rottentomatoes.com/m/{slug}_2025",
         f"https://www.rottentomatoes.com/m/{slug}_2026",
         f"https://www.rottentomatoes.com/m/{slug}_2027",
         f"https://www.rottentomatoes.com/m/{slug}_2028",
-        f"https://www.rottentomatoes.com/m/{slug}" # Standard
+        f"https://www.rottentomatoes.com/m/{slug}"
     ]
     
     for url in potential_urls:
         try:
-            # Timeout 1.0s to balance speed vs reliability
+            # Timeout 1.0s
             response = requests.get(url, headers=HEADERS, timeout=1.0)
             if response.status_code == 200:
                 return url
         except:
             pass
-
     return None
 
 def find_rt_url_paid(title):
@@ -107,27 +124,20 @@ def find_rt_url_paid(title):
 def scrape_rt_source(url):
     """Extracts 'criticsAll':{'averageRating':'8.8'} from source."""
     if not url: return "N/A"
-    
     try:
         response = requests.get(url, headers=HEADERS, timeout=5)
         if response.status_code == 200:
             html = response.text
-            
-            # Primary Pattern
             pattern = r'"criticsAll"\s*:\s*\{[^}]*"averageRating"\s*:\s*"(\d+\.?\d*)"'
             match = re.search(pattern, html)
             if match:
                 return f"{match.group(1)}/10"
-            
-            # Backup Pattern
             backup = r'"criticsScore"\s*:\s*\{[^}]*"averageRating"\s*:\s*"(\d+\.?\d*)"'
             match_back = re.search(backup, html)
             if match_back:
                 return f"{match_back.group(1)}/10"
-
     except:
         pass
-        
     return "N/A"
 
 # --- APP INTERFACE ---
@@ -136,22 +146,14 @@ st.caption("Select a theater below to see real critic scores.")
 
 with st.sidebar:
     st.header("Settings")
-    
-    # DROPDOWN MENU
-    selected_theater_name = st.selectbox(
-        "Choose Theater",
-        options=list(THEATERS.keys())
-    )
-    
-    # AUTOMATICALLY LOOK UP ZIP
+    selected_theater_name = st.selectbox("Choose Theater", options=list(THEATERS.keys()))
     selected_zip = THEATERS[selected_theater_name]
-    
     st.info(f"Checking: **{selected_theater_name}**")
     st.caption(f"(Zip: {selected_zip})")
 
 if st.button("Get True Ratings", type="primary"):
     with st.spinner(f"Checking showtimes for {selected_theater_name}..."):
-        # 1. Find Movies (Uses Theater Name + Zip)
+        # 1. Get Movies (With Late Night Fix)
         movies = get_movies_at_theater(selected_theater_name, selected_zip)
         
         if not movies:
@@ -166,18 +168,17 @@ if st.button("Get True Ratings", type="primary"):
             for i, movie in enumerate(movies):
                 status_text.text(f"Checking: {movie}")
                 
-                # Phase 1: Future-Proof Guess
+                # Phase 1: Free Guess
                 url = guess_rt_url(movie)
                 method = "Free Guess"
                 rating = scrape_rt_source(url)
                 
-                # Phase 2: Fallback to Paid Search
+                # Phase 2: Paid Fallback
                 if rating == "N/A":
                     url = find_rt_url_paid(movie)
                     method = "Paid Search"
                     rating = scrape_rt_source(url)
                 
-                # Sorting helper
                 sort_val = 0.0
                 try:
                     sort_val = float(rating.split("/")[0])
@@ -195,10 +196,8 @@ if st.button("Get True Ratings", type="primary"):
             
             progress.empty()
             status_text.empty()
-            
             data.sort(key=lambda x: x["_sort"], reverse=True)
             
-            # Display
             st.dataframe(
                 data,
                 column_order=["Movie", "True Rating", "Source", "Link"], 
