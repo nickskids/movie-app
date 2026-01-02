@@ -32,10 +32,10 @@ HEADERS = {
 
 def run_search_query(query, target_date_str=None):
     """
-    Greedy Search 2.0:
-    1. If searching for a SPECIFIC DATE: Only grab that date.
-    2. If searching for TODAY: Grab EVERY movie from EVERY day in the result.
-       (This fills in missing 'past' movies using tomorrow's data for free).
+    Greedy Search 3.0:
+    1. Grabs ALL movies from ALL days returned (Today + Tomorrow + ...).
+    2. This effectively "backfills" any movies that are sold out/past for today
+       by finding them in tomorrow's list.
     """
     params = {
         "engine": "google",
@@ -65,25 +65,23 @@ def run_search_query(query, target_date_str=None):
                             for m in day_block["movies"]:
                                 movies.add(m["name"])
                         date_match_found = True
-                        # For strict dates, we stop once we find it.
                         break 
                 else:
                     # TODAY/ALL MODE: Grab EVERYTHING.
-                    # We do NOT check for date headers. We just take all movies from all days.
-                    # This uses "Tomorrow's" data to backfill "Today's" missing movies.
+                    # We iterate through every day block Google sent us (Today, Tomorrow, etc.)
+                    # and add every movie we see to the list.
                     if "movies" in day_block:
                         for m in day_block["movies"]:
                             movies.add(m["name"])
                     found_date = "Today +"
 
         # SOURCE 2: KNOWLEDGE GRAPH (Carousel)
-        # Always add this for Today searches as a backup.
-        if not target_date_str: 
-            if "knowledge_graph" in results and "movies_playing" in results["knowledge_graph"]:
-                for m in results["knowledge_graph"]["movies_playing"]:
-                    movies.add(m["name"])
+        # Always add this as a backup.
+        if "knowledge_graph" in results and "movies_playing" in results["knowledge_graph"]:
+            for m in results["knowledge_graph"]["movies_playing"]:
+                movies.add(m["name"])
 
-        # FALLBACK: If Strict Mode failed to find the date, grab First Available Day (Prevent Blank Screen)
+        # FALLBACK: If Strict Mode failed to find the date, grab First Available Day
         if target_date_str and not date_match_found:
              if "showtimes" in results and len(results["showtimes"]) > 0:
                 first_day = results["showtimes"][0]
@@ -113,8 +111,10 @@ def get_movies_at_theater(theater_name, location, target_date_short=None, target
         return movies, found_date, is_fallback
     else:
         # TODAY SEARCH
-        query = f"movies playing at {theater_name} {location}"
-        # passing None triggers the "Grab Everything" logic
+        # CRITICAL FIX: We now use "showtimes for..." instead of "movies playing at..."
+        # This triggers the full multi-day table, allowing us to grab Tomorrow's movies
+        # to fill in the gaps for Today.
+        query = f"showtimes for {theater_name} {location}"
         movies, found_date = run_search_query(query, target_date_str=None)
         
         return list(movies), "Today", False
