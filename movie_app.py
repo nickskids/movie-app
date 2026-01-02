@@ -32,10 +32,10 @@ HEADERS = {
 
 def run_search_query(query, target_date_str=None):
     """
-    Smart Search:
-    1. Runs a GENERIC search (guarantees results).
-    2. Scans for 'target_date_str'.
-    3. If missing, defaults to First Available Day.
+    Greedy Search:
+    1. Grabs movies from 'Showtimes' (Upcoming).
+    2. Grabs movies from 'Knowledge Graph' (All Day).
+    3. Merges them to ensure NO movie is hidden.
     """
     params = {
         "engine": "google",
@@ -47,73 +47,80 @@ def run_search_query(query, target_date_str=None):
     try:
         search = GoogleSearch(params)
         results = search.get_dict()
-        movies = []
+        movies = set() # Use a set to handle duplicates automatically
         found_date = "Unknown Date"
         
-        # 1. Look for specific date match in the list
+        # SOURCE 1: SHOWTIMES LIST (Time-Specific)
+        # Good for finding the correct date, but hides past movies.
         date_match_found = False
-        if target_date_str and "showtimes" in results:
+        if "showtimes" in results:
             for day_block in results["showtimes"]:
                 day_header = day_block.get("day", "").lower()
-                if target_date_str.lower() in day_header:
+                
+                # Logic: If we are looking for a specific date, only grab that block.
+                # If we are looking for "Today" (target_date_str is None), grab the first block.
+                is_target = False
+                if target_date_str:
+                    if target_date_str.lower() in day_header:
+                        is_target = True
+                else:
+                    # If no target date, we assume the first block is Today
+                    is_target = True 
+                    # We only grab the first block for "Today" searches to prevent mixing days
+                    if date_match_found: is_target = False 
+
+                if is_target:
                     found_date = day_block.get("day", "Target Date")
                     if "movies" in day_block:
                         for m in day_block["movies"]:
-                            movies.append(m["name"])
+                            movies.add(m["name"])
                     date_match_found = True
-                    break
-        
-        # 2. Fallback: Grab the First Available Day
-        if not date_match_found:
-            # Check Showtimes first
-            if "showtimes" in results and len(results["showtimes"]) > 0:
+                    if not target_date_str: break # Stop after first day if generic search
+
+        # SOURCE 2: KNOWLEDGE GRAPH / CAROUSEL (The Safety Net)
+        # This list usually contains EVERYTHING playing "Today", even if shows are over.
+        # We ALWAYS add this for "Today" searches.
+        # We SKIP this for "Next Thursday" searches (because it's always Today's data).
+        if not target_date_str: 
+            if "knowledge_graph" in results and "movies_playing" in results["knowledge_graph"]:
+                for m in results["knowledge_graph"]["movies_playing"]:
+                    movies.add(m["name"])
+
+        # FALLBACK: If we wanted a specific date but found nothing, grab first available (Prevent Blank Screen)
+        if target_date_str and not date_match_found:
+             if "showtimes" in results and len(results["showtimes"]) > 0:
                 first_day = results["showtimes"][0]
                 found_date = first_day.get("day", "Today")
                 if "movies" in first_day:
                     for m in first_day["movies"]:
-                        movies.append(m["name"])
-            
-            # Check Knowledge Graph (Carousel) as last resort
-            elif "knowledge_graph" in results and "movies_playing" in results["knowledge_graph"]:
-                found_date = "Today (Carousel)"
-                for m in results["knowledge_graph"]["movies_playing"]:
-                    movies.append(m["name"])
+                        movies.add(m["name"])
 
-        return list(set(movies)), found_date
+        return list(movies), found_date
 
     except:
         return [], "Error"
 
 def get_movies_at_theater(theater_name, location, target_date_short=None, target_date_long=None):
     """
-    Orchestrates the search using BROAD QUERY logic.
+    Orchestrates the search using GREEDY logic.
     """
     if target_date_long:
-        # STRATEGY CHANGE: Use a GENERIC query.
-        # Asking for "Showtimes Jan 8" can return a blank page if Google has no data.
-        # Asking for "Showtimes" ALWAYS returns the current schedule list.
-        # We then filter that list for Jan 8 ourselves.
+        # FUTURE SEARCH
         query = f"showtimes for {theater_name} {location}"
-        
         movies, found_date = run_search_query(query, target_date_str=target_date_short)
         
-        # Did we find the date we asked for?
         is_fallback = False
         if target_date_short and target_date_short.lower() not in found_date.lower():
             is_fallback = True
             
         return movies, found_date, is_fallback
     else:
-        # SEARCH TODAY
+        # TODAY SEARCH (Use Greedy Method)
         query = f"movies playing at {theater_name} {location}"
         movies, found_date = run_search_query(query)
         
-        # Safety net for late night
-        if len(set(movies)) < 4:
-            movies_tomorrow, _ = run_search_query(f"movies playing at {theater_name} {location} tomorrow")
-            movies.extend(movies_tomorrow)
-            
-        return list(set(movies)), "Today", False
+        # No "Tomorrow" safety net needed anymore because the Greedy Method finds past movies too.
+        return list(movies), "Today", False
 
 def guess_rt_url(title):
     clean_title = re.sub(r'[^\w\s]', '', title).lower()
@@ -225,7 +232,7 @@ if st.button("Get True Ratings", type="primary"):
         movies, found_date, is_fallback = get_movies_at_theater(selected_theater_name, selected_zip, target_short, target_long)
         
         if not movies:
-            st.error("No movies found at all. Google might be blocking requests temporarily.")
+            st.error("No movies found at all.")
         else:
             # 2. INTELLIGENT WARNING
             if is_fallback:
