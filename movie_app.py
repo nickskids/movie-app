@@ -32,10 +32,10 @@ HEADERS = {
 
 def run_search_query(query, target_date_str=None):
     """
-    Greedy Search:
-    1. Grabs movies from 'Showtimes' (Upcoming).
-    2. Grabs movies from 'Knowledge Graph' (All Day).
-    3. Merges them to ensure NO movie is hidden.
+    Greedy Search 2.0:
+    1. If searching for a SPECIFIC DATE: Only grab that date.
+    2. If searching for TODAY: Grab EVERY movie from EVERY day in the result.
+       (This fills in missing 'past' movies using tomorrow's data for free).
     """
     params = {
         "engine": "google",
@@ -47,46 +47,43 @@ def run_search_query(query, target_date_str=None):
     try:
         search = GoogleSearch(params)
         results = search.get_dict()
-        movies = set() # Use a set to handle duplicates automatically
+        movies = set() 
         found_date = "Unknown Date"
         
-        # SOURCE 1: SHOWTIMES LIST (Time-Specific)
-        # Good for finding the correct date, but hides past movies.
+        # SOURCE 1: SHOWTIMES LIST
         date_match_found = False
         if "showtimes" in results:
             for day_block in results["showtimes"]:
                 day_header = day_block.get("day", "").lower()
                 
-                # Logic: If we are looking for a specific date, only grab that block.
-                # If we are looking for "Today" (target_date_str is None), grab the first block.
-                is_target = False
+                # LOGIC BRANCH:
                 if target_date_str:
+                    # STRICT MODE: Only grab if header matches target (e.g. "Jan 8")
                     if target_date_str.lower() in day_header:
-                        is_target = True
+                        found_date = day_block.get("day", "Target Date")
+                        if "movies" in day_block:
+                            for m in day_block["movies"]:
+                                movies.add(m["name"])
+                        date_match_found = True
+                        # For strict dates, we stop once we find it.
+                        break 
                 else:
-                    # If no target date, we assume the first block is Today
-                    is_target = True 
-                    # We only grab the first block for "Today" searches to prevent mixing days
-                    if date_match_found: is_target = False 
-
-                if is_target:
-                    found_date = day_block.get("day", "Target Date")
+                    # TODAY/ALL MODE: Grab EVERYTHING.
+                    # We do NOT check for date headers. We just take all movies from all days.
+                    # This uses "Tomorrow's" data to backfill "Today's" missing movies.
                     if "movies" in day_block:
                         for m in day_block["movies"]:
                             movies.add(m["name"])
-                    date_match_found = True
-                    if not target_date_str: break # Stop after first day if generic search
+                    found_date = "Today +"
 
-        # SOURCE 2: KNOWLEDGE GRAPH / CAROUSEL (The Safety Net)
-        # This list usually contains EVERYTHING playing "Today", even if shows are over.
-        # We ALWAYS add this for "Today" searches.
-        # We SKIP this for "Next Thursday" searches (because it's always Today's data).
+        # SOURCE 2: KNOWLEDGE GRAPH (Carousel)
+        # Always add this for Today searches as a backup.
         if not target_date_str: 
             if "knowledge_graph" in results and "movies_playing" in results["knowledge_graph"]:
                 for m in results["knowledge_graph"]["movies_playing"]:
                     movies.add(m["name"])
 
-        # FALLBACK: If we wanted a specific date but found nothing, grab first available (Prevent Blank Screen)
+        # FALLBACK: If Strict Mode failed to find the date, grab First Available Day (Prevent Blank Screen)
         if target_date_str and not date_match_found:
              if "showtimes" in results and len(results["showtimes"]) > 0:
                 first_day = results["showtimes"][0]
@@ -102,7 +99,7 @@ def run_search_query(query, target_date_str=None):
 
 def get_movies_at_theater(theater_name, location, target_date_short=None, target_date_long=None):
     """
-    Orchestrates the search using GREEDY logic.
+    Orchestrates the search.
     """
     if target_date_long:
         # FUTURE SEARCH
@@ -115,11 +112,11 @@ def get_movies_at_theater(theater_name, location, target_date_short=None, target
             
         return movies, found_date, is_fallback
     else:
-        # TODAY SEARCH (Use Greedy Method)
+        # TODAY SEARCH
         query = f"movies playing at {theater_name} {location}"
-        movies, found_date = run_search_query(query)
+        # passing None triggers the "Grab Everything" logic
+        movies, found_date = run_search_query(query, target_date_str=None)
         
-        # No "Tomorrow" safety net needed anymore because the Greedy Method finds past movies too.
         return list(movies), "Today", False
 
 def guess_rt_url(title):
@@ -228,13 +225,11 @@ with st.sidebar:
 if st.button("Get True Ratings", type="primary"):
     with st.spinner(f"Checking schedule..."):
         
-        # 1. GET MOVIES (1 Credit Only)
         movies, found_date, is_fallback = get_movies_at_theater(selected_theater_name, selected_zip, target_short, target_long)
         
         if not movies:
             st.error("No movies found at all.")
         else:
-            # 2. INTELLIGENT WARNING
             if is_fallback:
                 st.warning(f"⚠️ Schedule for **{target_long}** is not posted yet.")
                 st.info(f"Showing results for **{found_date}** instead (so your credit isn't wasted).")
