@@ -156,7 +156,7 @@ def find_rt_url_paid(title):
 
 def scrape_rt_source(url):
     """
-    Returns: rating, count, release_date
+    Returns: rating, count, release_date (Formatted as MM/DD/YYYY)
     """
     if not url: return "N/A", "N/A", "N/A"
     
@@ -181,16 +181,18 @@ def scrape_rt_source(url):
                  match_rating_back = re.search(r'"criticsScore"\s*:\s*\{[^}]*?"averageRating"\s*:\s*"(\d+\.?\d*)"', html)
                  if match_rating_back: rating = f"{match_rating_back.group(1)}/10"
 
-            # 3. RELEASE DATE (Priority: Wide -> Theaters)
-            # Try finding "Release Date (Wide)"
-            match_wide = re.search(r'Release Date \(Wide\).*?<time[^>]*>([^<]+)</time>', html)
-            if match_wide:
-                r_date = match_wide.group(1)
-            else:
-                # Try finding "Release Date (Theaters)"
-                match_theaters = re.search(r'Release Date \(Theaters\).*?<time[^>]*>([^<]+)</time>', html)
-                if match_theaters:
-                    r_date = match_theaters.group(1)
+            # 3. RELEASE DATE
+            # Matches: "Nov 26, 2025" or similar
+            match_date = re.search(r'Release Date \((?:Theaters|Wide)\).*?(\w{3}\s+\d{1,2},\s+\d{4})', html, re.DOTALL)
+            if match_date:
+                raw_date = match_date.group(1)
+                try:
+                    # Parse "Nov 26, 2025" -> DateTime -> "11/26/2025"
+                    dt = datetime.datetime.strptime(raw_date, "%b %d, %Y")
+                    r_date = dt.strftime("%m/%d/%Y")
+                except:
+                    # If parsing fails (unusual format), keep the original text
+                    r_date = raw_date
             
             return rating, count, r_date
     except:
@@ -278,7 +280,7 @@ if st.button("Get True Ratings", type="primary"):
                     "Movie": movie,
                     "True Rating": rating,
                     "Reviews": count,
-                    "Release Date": r_date, # New Column
+                    "Release Date": r_date,
                     "Source": method,
                     "_sort": sort_val,
                     "Link": url
@@ -296,7 +298,7 @@ if st.button("Get True Ratings", type="primary"):
                     "Movie": st.column_config.TextColumn("Movie", width="medium"),
                     "True Rating": st.column_config.TextColumn("Score", width="small"),
                     "Reviews": st.column_config.TextColumn("Count", width="small"),
-                    "Release Date": st.column_config.TextColumn("Released", width="small"), # Config
+                    "Release Date": st.column_config.TextColumn("Released", width="small"),
                     "Source": st.column_config.TextColumn("Method", width="small"),
                     "Link": st.column_config.LinkColumn("Verify"),
                     "_sort": None
