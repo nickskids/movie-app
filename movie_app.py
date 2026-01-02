@@ -68,15 +68,12 @@ def run_search_query(query, target_date_str=None):
                         break 
                 else:
                     # TODAY/ALL MODE: Grab EVERYTHING.
-                    # We iterate through every day block Google sent us (Today, Tomorrow, etc.)
-                    # and add every movie we see to the list.
                     if "movies" in day_block:
                         for m in day_block["movies"]:
                             movies.add(m["name"])
                     found_date = "Today +"
 
         # SOURCE 2: KNOWLEDGE GRAPH (Carousel)
-        # Always add this as a backup.
         if "knowledge_graph" in results and "movies_playing" in results["knowledge_graph"]:
             for m in results["knowledge_graph"]["movies_playing"]:
                 movies.add(m["name"])
@@ -105,17 +102,9 @@ def get_movies_at_theater(theater_name, location, target_date_short=None, target
         movies, found_date = run_search_query(query, target_date_str=target_date_short)
         
         is_fallback = False
-        
-        # CHECK: Did we find the actual date, or did we default to today?
-        # If the date found ("Today") does not match target ("Jan 8"), we are in fallback.
         if target_date_short and target_date_short.lower() not in found_date.lower():
             is_fallback = True
-            
-            # CRITICAL FIX: The previous search might have returned a "weak" list because 
-            # it was looking for a specific date that didn't exist.
-            # We FORCE a re-run using the robust "Today" logic (target_date_str=None)
-            # to ensure we capture the full "Greedy" list (Today + Tomorrow merged).
-            # This costs 1 extra credit, but only happens when the schedule is missing.
+            # Force re-run with "Today" logic to get greedy results
             query_today = f"showtimes for {theater_name} {location}"
             movies, found_date = run_search_query(query_today, target_date_str=None)
             
@@ -124,7 +113,6 @@ def get_movies_at_theater(theater_name, location, target_date_short=None, target
         # TODAY SEARCH
         query = f"showtimes for {theater_name} {location}"
         movies, found_date = run_search_query(query, target_date_str=None)
-        
         return list(movies), "Today", False
 
 def guess_rt_url(title):
@@ -167,7 +155,10 @@ def find_rt_url_paid(title):
     return None
 
 def scrape_rt_source(url):
-    if not url: return "N/A", "N/A"
+    """
+    Returns: rating, count, release_date
+    """
+    if not url: return "N/A", "N/A", "N/A"
     
     try:
         response = requests.get(url, headers=HEADERS, timeout=5)
@@ -175,24 +166,36 @@ def scrape_rt_source(url):
             html = response.text
             rating = "N/A"
             count = "N/A"
+            r_date = "N/A"
             
-            # Rating
+            # 1. Rating
             match_rating = re.search(r'"criticsAll"\s*:\s*\{[^}]*?"averageRating"\s*:\s*"(\d+\.?\d*)"', html)
             if match_rating: rating = f"{match_rating.group(1)}/10"
                 
-            # Count
+            # 2. Count
             match_count = re.search(r'"criticsAll"\s*:\s*\{[^}]*?"reviewCount"\s*:\s*(\d+)', html)
             if match_count: count = match_count.group(1)
             
-            # Backup
+            # Backup Rating
             if rating == "N/A":
                  match_rating_back = re.search(r'"criticsScore"\s*:\s*\{[^}]*?"averageRating"\s*:\s*"(\d+\.?\d*)"', html)
                  if match_rating_back: rating = f"{match_rating_back.group(1)}/10"
 
-            return rating, count
+            # 3. RELEASE DATE (Priority: Wide -> Theaters)
+            # Try finding "Release Date (Wide)"
+            match_wide = re.search(r'Release Date \(Wide\).*?<time[^>]*>([^<]+)</time>', html)
+            if match_wide:
+                r_date = match_wide.group(1)
+            else:
+                # Try finding "Release Date (Theaters)"
+                match_theaters = re.search(r'Release Date \(Theaters\).*?<time[^>]*>([^<]+)</time>', html)
+                if match_theaters:
+                    r_date = match_theaters.group(1)
+            
+            return rating, count, r_date
     except:
         pass
-    return "N/A", "N/A"
+    return "N/A", "N/A", "N/A"
 
 def get_next_thursday_data():
     today = datetime.date.today()
@@ -257,13 +260,13 @@ if st.button("Get True Ratings", type="primary"):
                 # Phase 1: Free Guess
                 url = guess_rt_url(movie)
                 method = "Free Guess"
-                rating, count = scrape_rt_source(url)
+                rating, count, r_date = scrape_rt_source(url)
                 
                 # Phase 2: Paid Fallback
                 if rating == "N/A" and (date_mode == "Today" or is_fallback):
                     url = find_rt_url_paid(movie)
                     method = "Paid Search"
-                    rating, count = scrape_rt_source(url)
+                    rating, count, r_date = scrape_rt_source(url)
                 
                 sort_val = 0.0
                 try:
@@ -275,6 +278,7 @@ if st.button("Get True Ratings", type="primary"):
                     "Movie": movie,
                     "True Rating": rating,
                     "Reviews": count,
+                    "Release Date": r_date, # New Column
                     "Source": method,
                     "_sort": sort_val,
                     "Link": url
@@ -287,11 +291,12 @@ if st.button("Get True Ratings", type="primary"):
             
             st.dataframe(
                 data,
-                column_order=["Movie", "True Rating", "Reviews", "Source", "Link"], 
+                column_order=["Movie", "True Rating", "Reviews", "Release Date", "Source", "Link"], 
                 column_config={
                     "Movie": st.column_config.TextColumn("Movie", width="medium"),
                     "True Rating": st.column_config.TextColumn("Score", width="small"),
                     "Reviews": st.column_config.TextColumn("Count", width="small"),
+                    "Release Date": st.column_config.TextColumn("Released", width="small"), # Config
                     "Source": st.column_config.TextColumn("Method", width="small"),
                     "Link": st.column_config.LinkColumn("Verify"),
                     "_sort": None
