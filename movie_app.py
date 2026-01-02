@@ -32,7 +32,7 @@ HEADERS = {
 
 def run_search_query(query, target_date_str=None):
     """
-    Greedy Search 3.0:
+    Greedy Search 4.0:
     1. Grabs ALL movies from ALL days returned (Today + Tomorrow + ...).
     2. This effectively "backfills" any movies that are sold out/past for today
        by finding them in tomorrow's list.
@@ -105,15 +105,23 @@ def get_movies_at_theater(theater_name, location, target_date_short=None, target
         movies, found_date = run_search_query(query, target_date_str=target_date_short)
         
         is_fallback = False
+        
+        # CHECK: Did we find the actual date, or did we default to today?
+        # If the date found ("Today") does not match target ("Jan 8"), we are in fallback.
         if target_date_short and target_date_short.lower() not in found_date.lower():
             is_fallback = True
+            
+            # CRITICAL FIX: The previous search might have returned a "weak" list because 
+            # it was looking for a specific date that didn't exist.
+            # We FORCE a re-run using the robust "Today" logic (target_date_str=None)
+            # to ensure we capture the full "Greedy" list (Today + Tomorrow merged).
+            # This costs 1 extra credit, but only happens when the schedule is missing.
+            query_today = f"showtimes for {theater_name} {location}"
+            movies, found_date = run_search_query(query_today, target_date_str=None)
             
         return movies, found_date, is_fallback
     else:
         # TODAY SEARCH
-        # CRITICAL FIX: We now use "showtimes for..." instead of "movies playing at..."
-        # This triggers the full multi-day table, allowing us to grab Tomorrow's movies
-        # to fill in the gaps for Today.
         query = f"showtimes for {theater_name} {location}"
         movies, found_date = run_search_query(query, target_date_str=None)
         
@@ -232,7 +240,7 @@ if st.button("Get True Ratings", type="primary"):
         else:
             if is_fallback:
                 st.warning(f"⚠️ Schedule for **{target_long}** is not posted yet.")
-                st.info(f"Showing results for **{found_date}** instead (so your credit isn't wasted).")
+                st.info(f"Showing results for **Today (Full Schedule)** instead.")
             else:
                 if date_mode == "Next Thursday":
                     st.success(f"✅ Found specific schedule for **{target_long}**!")
