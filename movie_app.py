@@ -765,20 +765,18 @@ if run:
     </div>
     """, unsafe_allow_html=True)
 
-    # ── Score cards ─────────────────────────────────────────────────────
-    cards_html = '<div class="score-grid">'
-
-    for r in results:
+    # ── Score cards — rendered two per row to avoid Streamlit HTML limits ──
+    def render_card(r: dict) -> str:
         color_cls  = score_color_class(r["rating"])
         bar_color  = score_bar_color(r["rating"])
-        bar_pct    = score_bar_pct(r["rating"])
+        bar_pct    = round(score_bar_pct(r["rating"]), 1)
         display_rt = r["rating"] if r["rating"] != "N/A" else "—"
         pick       = is_pick(r["rating"])
         card_cls   = "score-card pick" if pick else "score-card"
-        pick_badge = '<span class="pick-badge">✦ Pick</span>' if pick else ""
+        pick_badge = '<span class="pick-badge">&#10022; Pick</span>' if pick else ""
         link_html  = (
             f'<a href="{r["url"]}" target="_blank" '
-            f'style="color:#c8a96e;text-decoration:none;font-size:0.7rem">↗ RT</a>'
+            f'style="color:#c8a96e;text-decoration:none;font-size:0.7rem">RT &#8599;</a>'
             if r["url"] else ""
         )
         detail_parts = []
@@ -787,23 +785,28 @@ if run:
         if r["r_date"] != "N/A":
             detail_parts.append(r["r_date"])
         detail_parts.append(r["method"])
-        detail_str = " · ".join(detail_parts)
+        detail_str = " &middot; ".join(detail_parts)
 
-        cards_html += f"""
-        <div class="{card_cls}">
-          <div class="score-badge {color_cls}">{display_rt}</div>
-          <div class="score-meta">
-            <div class="score-title" title="{r['movie']}">{r['movie']}{pick_badge}</div>
-            <div class="score-detail">{detail_str} &nbsp; {link_html}</div>
-          </div>
-          <div class="score-bar-wrap">
-            <div class="score-bar" style="width:{bar_pct}%;background:{bar_color}"></div>
-          </div>
-        </div>
-        """
+        return (
+            f'<div class="{card_cls}" style="border-radius:8px;margin-bottom:1px;">'
+            f'<div class="score-badge {color_cls}">{display_rt}</div>'
+            f'<div class="score-meta">'
+            f'<div class="score-title" title="{r["movie"]}">{r["movie"]}{pick_badge}</div>'
+            f'<div class="score-detail">{detail_str} &nbsp; {link_html}</div>'
+            f'</div>'
+            f'<div class="score-bar-wrap">'
+            f'<div class="score-bar" style="width:{bar_pct}%;background:{bar_color}"></div>'
+            f'</div>'
+            f'</div>'
+        )
 
-    cards_html += "</div>"
-    st.markdown(cards_html, unsafe_allow_html=True)
+    # Render two cards per row
+    pairs = [results[i:i+2] for i in range(0, len(results), 2)]
+    for pair in pairs:
+        cols = st.columns(len(pair))
+        for col, r in zip(cols, pair):
+            with col:
+                st.markdown(render_card(r), unsafe_allow_html=True)
 
     st.markdown(
         "<div style='font-family:DM Mono,monospace;font-size:0.65rem;"
