@@ -13,7 +13,7 @@ st.set_page_config(
     page_title="CriticScore | Real Ratings",
     page_icon="🎬",
     layout="wide",
-    initial_sidebar_state="expanded"
+    initial_sidebar_state="collapsed"
 )
 
 # ─────────────────────────────────────────────
@@ -249,23 +249,31 @@ html, body, [class*="css"] {
 /* ── Button ── */
 .stButton > button {
     background: #c8a96e !important;
-    color: #0d0d0f !important;
+    color: #000000 !important;
     border: none !important;
     border-radius: 6px !important;
     font-family: 'DM Sans', sans-serif !important;
-    font-weight: 500 !important;
-    font-size: 0.85rem !important;
-    letter-spacing: 0.08em !important;
+    font-weight: 700 !important;
+    font-size: 0.9rem !important;
+    letter-spacing: 0.1em !important;
     text-transform: uppercase !important;
-    padding: 0.6rem 1.8rem !important;
+    padding: 0.75rem 1.2rem !important;
     width: 100% !important;
-    margin-top: 1rem !important;
+    min-height: 2.8rem !important;
     transition: all 0.2s !important;
+    box-shadow: 0 2px 8px rgba(200, 169, 110, 0.35) !important;
 }
 
 .stButton > button:hover {
     background: #d4ba82 !important;
+    color: #000000 !important;
+    box-shadow: 0 4px 14px rgba(200, 169, 110, 0.5) !important;
     transform: translateY(-1px) !important;
+}
+
+.stButton > button p {
+    color: #000000 !important;
+    font-weight: 700 !important;
 }
 
 /* ── Progress bar ── */
@@ -286,8 +294,9 @@ hr {
     margin: 1.2rem 0 !important;
 }
 
-/* ── Hide streamlit branding ── */
+/* ── Hide streamlit branding + sidebar toggle ── */
 #MainMenu, footer, header { visibility: hidden; }
+[data-testid="collapsedControl"] { display: none; }
 
 /* ── Spinner ── */
 .stSpinner > div {
@@ -640,13 +649,12 @@ st.markdown("""
 
 
 # ─────────────────────────────────────────────
-#  UI — SIDEBAR
+#  UI — CONTROLS (no sidebar — works on mobile)
 # ─────────────────────────────────────────────
 
-with st.sidebar:
-    st.markdown("### 🎬 Settings")
-    st.markdown("---")
+col_theater, col_date, col_btn = st.columns([3, 1.2, 1])
 
+with col_theater:
     selected_theater = st.selectbox(
         "THEATER",
         options=list(THEATERS.keys()),
@@ -654,34 +662,24 @@ with st.sidebar:
     )
     selected_zip = THEATERS[selected_theater]
 
-    st.markdown("---")
-
+with col_date:
     date_mode = st.radio(
         "DATE",
         ["Today", "Next Thursday"],
-        horizontal=False,
         label_visibility="visible"
     )
 
-    target_short = target_long = None
+target_short = target_long = None
+if date_mode == "Next Thursday":
+    target_short, target_long, days_away = get_next_thursday()
+    if days_away > 5:
+        st.warning("⚠️ Schedule may not be posted yet for that Thursday.")
 
-    if date_mode == "Next Thursday":
-        target_short, target_long, days_away = get_next_thursday()
-        st.info(f"📅 **{target_long}**")
-        if days_away > 5:
-            st.warning("Schedule may not be posted yet.")
-
-    st.markdown("---")
-    st.markdown(
-        "<div style='font-size:0.68rem;color:#3a3a45;font-family:DM Mono,monospace;"
-        "letter-spacing:0.06em;line-height:1.7'>"
-        "Scores are the hidden All Critics<br>Average (x/10) embedded in<br>"
-        "RT page source — not the<br>visible Tomatometer %."
-        "</div>",
-        unsafe_allow_html=True
-    )
-
+with col_btn:
+    st.markdown("<div style='margin-top:1.9rem'></div>", unsafe_allow_html=True)
     run = st.button("Get Ratings", type="primary")
+
+st.markdown("<hr style='border-color:#1e1e24;margin:0.5rem 0 1.5rem 0'>", unsafe_allow_html=True)
 
 
 # ─────────────────────────────────────────────
