@@ -460,12 +460,15 @@ def guess_rt_url(title: str) -> str | None:
     slug  = re.sub(r"\s+", "_", clean.strip())
     yr    = datetime.date.today().year
 
-    # No-year first (most common), then cross-year variants
+    # Current year first (most likely for a film in theaters now),
+    # then adjacent years for cross-year releases,
+    # no-year LAST — it returns the oldest/most prominent RT entry
+    # and would pull the wrong film if a title has prior history.
     candidates = [
-        f"https://www.rottentomatoes.com/m/{slug}",
         f"https://www.rottentomatoes.com/m/{slug}_{yr}",
-        f"https://www.rottentomatoes.com/m/{slug}_{yr - 1}",
         f"https://www.rottentomatoes.com/m/{slug}_{yr + 1}",
+        f"https://www.rottentomatoes.com/m/{slug}_{yr - 1}",
+        f"https://www.rottentomatoes.com/m/{slug}",
     ]
     for url in candidates:
         try:
